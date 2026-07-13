@@ -141,20 +141,25 @@ def altman_z(curr: pd.DataFrame, market_cap: pd.Series) -> tuple[pd.Series, pd.S
 
     Z = 1.2*WC/TA + 1.4*RE/TA + 3.3*EBIT/TA + 0.6*MktCap/TL + 1.0*Sales/TA
 
-    EBIT: NetIncomeLoss plus tax and interest add-backs where those tags are
-    filed. When IncomeTaxExpenseBenefit / InterestExpense are missing we fall
-    back to adding back only what IS available (worst case plain net income).
-    CAVEAT: this understates EBIT for taxpaying levered firms — a documented
-    approximation, deliberately preferred over fabricating a tax rate.
+    EBIT: uses a directly-tagged 'EBIT' canonical fact when the source
+    taxonomy provides one (e.g. Brazil's CVM DRE code 3.05, "Resultado Antes
+    do Resultado Financeiro e dos Tributos" — a real EBIT line, not an
+    approximation). US-GAAP filers have no such tag, so for them EBIT falls
+    back to NetIncomeLoss plus tax and interest add-backs where those tags
+    are filed (adding back only what IS available when one is missing).
+    CAVEAT: the fallback understates EBIT for taxpaying levered firms — a
+    documented approximation, deliberately preferred over fabricating a tax
+    rate, and only used when no direct EBIT fact exists.
     """
     ta = curr["Assets"]
     wc = curr["AssetsCurrent"] - curr["LiabilitiesCurrent"]
     re_ = curr["RetainedEarningsAccumulatedDeficit"]
-    ebit = (
+    ebit_approx = (
         curr["NetIncomeLoss"]
         + _coalesce(curr, ["IncomeTaxExpenseBenefit"]).fillna(0)
         + _coalesce(curr, ["InterestExpense"]).fillna(0)
     )
+    ebit = _coalesce(curr, ["EBIT"]).fillna(ebit_approx) if "EBIT" in curr.columns else ebit_approx
     tl = total_liabilities(curr)
     sales = revenues(curr)
     mc = market_cap.reindex(curr.index)

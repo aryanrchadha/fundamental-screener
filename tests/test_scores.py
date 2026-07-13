@@ -104,6 +104,19 @@ def test_altman_ebit_fallback_without_tax_interest_tags():
     assert z["GOODCO"] == pytest.approx(expected)
 
 
+def test_altman_prefers_direct_ebit_tag_over_approximation():
+    """Non-US taxonomies (e.g. CVM Brazil) can supply a directly-tagged EBIT
+    fact; it must be used in place of the NI+tax+interest approximation,
+    even when tax/interest tags are ALSO present (the direct tag is more
+    accurate, so it should win, not just fill a gap)."""
+    curr_row = dict(GOODCO_CURR)
+    curr_row["EBIT"] = 200.0  # deliberately different from the 160.0 approximation
+    curr = make_snapshot({"GOODCO": curr_row})
+    z, valid = scores.altman_z(curr, pd.Series({"GOODCO": 2000.0}))
+    expected = 1.2 * 0.2 + 1.4 * 0.5 + 3.3 * (200.0 / 1000.0) + 0.6 * 5.0 + 1.0 * 0.8
+    assert z["GOODCO"] == pytest.approx(expected)
+
+
 def test_ohlson_known_value():
     curr = make_snapshot({"BADCO": BADCO_CURR})
     prior = make_snapshot({"BADCO": BADCO_PRIOR})

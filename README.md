@@ -42,6 +42,63 @@ constituents at that date — but the changes table is itself labeled
 (Project 58 in the broader portfolio) remains future work. Treat all
 backtest levels as optimistic.
 
+## International extension: Brazil / B3 (proof of concept)
+
+`pit_fundamentals` supports a second taxonomy end-to-end: Brazil's CVM
+Dados Abertos (the SEC's direct counterpart — a free, no-key, structured
+open-data portal), via `pit_fundamentals/cvm_br_client.py`. Brazil was
+chosen over other "leading EM" exchanges (India's NSE/BSE, China's
+SSE/SZSE, South Africa's JSE) because none of those have a free, structured,
+EDGAR-like bulk fundamentals source — CVM does. (South Korea's DART system
+is the next-best candidate; it requires registering for a free API key,
+which would need the same optional/degrades-gracefully treatment this
+project already gives `FMP_API_KEY` — left as future work.)
+
+```bash
+python -m pit_fundamentals.ingest --taxonomy cvm-br --years 2022 2023 --db data/pit_br_demo.duckdb
+```
+
+This ingests a manually curated, documented crosswalk of 16 Ibovespa blue
+chips (`screener/universe_br.py` — CNPJ mappings verified against real 2023
+CVM filings, not guessed) and maps CVM's standardized account codes
+(`CD_CONTA`, e.g. `"1.01"` = *Ativo Circulante*) onto the exact same
+canonical tags US-GAAP facts use (`Assets`, `NetIncomeLoss`, ...), so
+`screener/scores.py`'s Piotroski/Altman/Ohlson functions run **completely
+unmodified** on Brazilian filings. Real result from this run — 13 of 16
+scored successfully:
+
+| Ticker | Sector | F-Score | O-Score |
+|---|---|---|---|
+| WEGE3 (WEG) | Industrials | 8 | −10.4 |
+| ABEV3 (Ambev) | Consumer Staples | 8 | −10.4 |
+| LREN3 (Lojas Renner) | Consumer Discretionary | 7 | −8.7 |
+| VALE3 (Vale) | Materials | 6 | −9.3 |
+| PETR4 (Petrobras) | Energy | 6 | −9.4 |
+| ITUB4, BBDC4, BBAS3 (banks) | Financials | — | — |
+| BBSE3 (insurer) | Financials | — | — |
+
+The three banks and the insurance holding company were **automatically
+excluded** — not via a hardcoded "skip financials" list, but because
+Brazilian banks file under COSIF (a different chart of accounts that reuses
+the *same* numeric codes for different line items — e.g. code `"1.01"`
+means *Caixa e Equivalentes de Caixa* for a bank vs. *Ativo Circulante* for
+an industrial filer). `cvm_br_client.py` verifies each account's text label
+before trusting its code and drops any mismatch rather than mismapping it —
+confirmed against real filings from Banco do Brasil, Bradesco, Itaú, and BB
+Seguridade, each excluded on exactly the fields their non-industrial chart
+of accounts diverges on.
+
+**What this is not**: a second backtestable universe. There is no free
+historical B3 constituent-membership table, no BRL/USD-aware return
+pipeline in `screener/backtest.py`, and a real, discovered data-quality gap
+in CVM's own data — the `composicao_capital` (share count) file has no
+`ESCALA_MOEDA`-style scale field, and cross-checking real filings shows some
+companies self-report in thousands and others in raw share counts with no
+way to detect which from the file alone. Altman Z's market-cap term is
+therefore **not** reliable for CVM-sourced companies without a manual
+per-company scale check; F-Score and O-Score (neither needs market cap) are
+unaffected and were verified against hand-checked real filings.
+
 ## Setup
 
 ```bash
@@ -94,7 +151,11 @@ from pit_fundamentals import get_fact_as_of, build_pit_snapshot
 
 ```
 pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
+  edgar_client.py     # SEC EDGAR HTTP client (rate-limited, cached)
+  cvm_br_client.py     # Brazil/CVM Dados Abertos adapter (second taxonomy)
+  ingest.py            # CLI: --taxonomy {us-gaap, cvm-br}
 screener/           # universe, scores, normalize, composite, backtest, validation
+  universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk
 dashboard/          # Plotly Dash app (6 views)
 tests/              # score formulas, normalization, CV-leakage guard, PIT-universe exclusion
 notebooks/          # colab_quickstart.ipynb — full pipeline end to end

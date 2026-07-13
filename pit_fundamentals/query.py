@@ -33,6 +33,7 @@ FLOW_TAGS = {
     "IncomeTaxExpenseBenefit",
     "InterestExpense",
     "WeightedAverageNumberOfSharesOutstandingBasic",
+    "EBIT",  # only populated by taxonomies with a direct EBIT line (e.g. cvm-br); NaN for us-gaap
 }
 MIN_ANNUAL_DAYS = 300  # a fiscal year is ~365d; 300 excludes quarterly/semiannual frames
 
@@ -129,10 +130,14 @@ def build_pit_snapshot(
                          AND f.start_date IS NOT NULL
                          AND date_diff('day', f.start_date, f.fiscal_period_end) >= {MIN_ANNUAL_DAYS})
                         -- instant (balance-sheet/share) tags: fiscal-YEAR-END
-                        -- values only (10-K forms), so YoY deltas compare
-                        -- annual balance sheets, not a 10-Q against a 10-K
+                        -- values only, so YoY deltas compare annual balance
+                        -- sheets, not a 10-Q/quarterly filing against an
+                        -- annual one. 'DFP' (Brazil/CVM) is unambiguously
+                        -- annual by construction — the quarterly form is
+                        -- 'ITR', a separate CVM dataset this project's
+                        -- cvm_br_client.py does not ingest.
                         OR (f.tag NOT IN (SELECT tag FROM _flow_tags)
-                            AND f.form LIKE '10-K%')
+                            AND (f.form LIKE '10-K%' OR f.form = 'DFP'))
                       )
             ),
             latest_filing AS (

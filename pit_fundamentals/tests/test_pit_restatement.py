@@ -103,12 +103,12 @@ def test_synthetic_restatement_pit_gating(tmp_path):
             dict(cik="0000000001", ticker="ACME", tag="NetIncomeLoss",
                  fiscal_period_end=date(2020, 12, 31), start_date=date(2020, 1, 1),
                  filed_date=date(2021, 2, 15), value=100.0, unit="USD",
-                 form="10-K", fy=2020, fp="FY", is_restatement=False),
+                 form="10-K", fy=2020, fp="FY", is_restatement=False, taxonomy="us-gaap"),
             # 10-K/A restatement, filed later, different value
             dict(cik="0000000001", ticker="ACME", tag="NetIncomeLoss",
                  fiscal_period_end=date(2020, 12, 31), start_date=date(2020, 1, 1),
                  filed_date=date(2021, 11, 30), value=80.0, unit="USD",
-                 form="10-K/A", fy=2020, fp="FY", is_restatement=True),
+                 form="10-K/A", fy=2020, fp="FY", is_restatement=True, taxonomy="us-gaap"),
         ]
     )
     con.register("_rows", rows)

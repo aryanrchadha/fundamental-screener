@@ -174,12 +174,24 @@ def run_ingest(
 
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    p = argparse.ArgumentParser(description="Ingest EDGAR XBRL facts into the PIT DB")
+    p = argparse.ArgumentParser(description="Ingest fundamentals facts into the PIT DB")
     p.add_argument("--universe", default="sp500", choices=["sp500"])
-    p.add_argument("--limit", type=int, default=None, help="ingest only the first N tickers")
+    p.add_argument(
+        "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br"],
+        help="us-gaap: SEC EDGAR XBRL (default). cvm-br: Brazil/B3 blue chips via CVM Dados Abertos.",
+    )
+    p.add_argument("--limit", type=int, default=None, help="ingest only the first N tickers (us-gaap only)")
+    p.add_argument("--years", type=int, nargs="+", default=[2023], help="DFP years to pull (cvm-br only)")
     p.add_argument("--refresh", action="store_true", help="re-ingest already-loaded CIKs")
     p.add_argument("--db", default=DEFAULT_DB_PATH)
     args = p.parse_args(argv)
+
+    if args.taxonomy == "cvm-br":
+        from pit_fundamentals.cvm_br_client import run_cvm_ingest
+        from screener.universe_br import get_br_blue_chips
+
+        run_cvm_ingest(get_br_blue_chips(), years=args.years, db_path=args.db)
+        return
 
     # The universe list lives in the screener package; imported lazily so
     # pit_fundamentals itself stays importable without the screener installed.

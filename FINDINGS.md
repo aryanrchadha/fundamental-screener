@@ -193,6 +193,42 @@ constructed example.
    noncontrolling interests into liabilities, slightly overstating leverage
    for consolidated groups.
 
+## International extension (Brazil / B3): what was proven and what wasn't
+
+`pit_fundamentals` now ingests a second, real, free taxonomy — Brazil's CVM
+Dados Abertos — for 16 Ibovespa blue chips (`screener/universe_br.py`). This
+was chosen over India/China/South Africa because none of those have a free,
+structured, EDGAR-equivalent bulk fundamentals source; CVM does.
+
+**Proven, with real numbers**: `get_fact_as_of`/`build_pit_snapshot` and the
+unmodified Piotroski/Ohlson scoring functions work identically on CVM
+account-code data. 13 of 16 tickers scored (F-Score 3–8, O-Score −7.0 to
+−10.7, all comfortably distress-free, consistent with these being the
+largest, most stable names on the exchange). The 3 banks and 1 insurer were
+excluded automatically — Brazilian financial institutions file under COSIF,
+which reuses BPA/BPP/DRE's numeric codes for entirely different accounts
+(confirmed concretely: code `"1.01"` is *Ativo Circulante* for an
+industrial filer but *Caixa e Equivalentes de Caixa* for Banco do Brasil,
+Bradesco, and Itaú, and BB Seguridade's income-statement codes use
+insurance-specific labels that don't match the industrial DRE template
+either). The adapter verifies each account's text label before accepting
+its value and drops mismatches — the same "exclude and log, never
+fabricate" discipline as the US path, just triggered by a different
+mechanism (label verification vs. missing classified-balance-sheet tags).
+
+**Not proven / explicitly out of scope**: this is a scoring demonstration,
+not a second backtest. There's no free B3 historical constituent list, no
+FX-aware return pipeline, and — a genuine finding from reading the raw
+data, not a hypothetical caveat — CVM's `composicao_capital` (share count)
+file carries no scale metadata analogous to `ESCALA_MOEDA`. Cross-checking
+real filings found Petrobras's raw share count matches its known ~13B
+shares directly, while Vale's raw figure (~4.5M) is off by roughly 1000x
+from its known ~4.5B shares — implying inconsistent self-reported scale
+across filers with no way to detect which convention a given company used
+from the file alone. Altman Z's market-cap term is flagged unreliable for
+CVM-sourced names as a result; this was caught by actually inspecting
+values against known real share counts, not assumed.
+
 ## Bottom line
 
 As a *screener* the artifact works and the infrastructure (the PIT database
