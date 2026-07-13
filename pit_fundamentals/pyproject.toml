@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pit-fundamentals"
+version = "0.1.0"
+description = "Point-in-time SEC EDGAR XBRL fundamentals database, gated by filing date"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=0.10",
+    "pandas>=2.0",
+    "requests>=2.31",
+    "requests-cache>=1.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+# The package directory is this directory's own name when installed from the
+# repo root; setuptools needs the explicit mapping because pyproject.toml
+# lives inside the package folder itself.
+packages = ["pit_fundamentals"]
+package-dir = { "pit_fundamentals" = "." }
