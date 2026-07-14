@@ -177,11 +177,16 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Ingest fundamentals facts into the PIT DB")
     p.add_argument("--universe", default="sp500", choices=["sp500"])
     p.add_argument(
-        "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br"],
-        help="us-gaap: SEC EDGAR XBRL (default). cvm-br: Brazil/B3 blue chips via CVM Dados Abertos.",
+        "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br", "dart-kr"],
+        help=(
+            "us-gaap: SEC EDGAR XBRL (default). cvm-br: Brazil/B3 blue chips via "
+            "CVM Dados Abertos. dart-kr: South Korea/KOSPI via DART OpenAPI "
+            "(requires DART_API_KEY env var; NOT live-verified, see "
+            "dart_kr_client.py's module docstring before trusting output)."
+        ),
     )
     p.add_argument("--limit", type=int, default=None, help="ingest only the first N tickers (us-gaap only)")
-    p.add_argument("--years", type=int, nargs="+", default=[2023], help="DFP years to pull (cvm-br only)")
+    p.add_argument("--years", type=int, nargs="+", default=[2023], help="DFP/DART years to pull (cvm-br/dart-kr only)")
     p.add_argument("--refresh", action="store_true", help="re-ingest already-loaded CIKs")
     p.add_argument("--db", default=DEFAULT_DB_PATH)
     args = p.parse_args(argv)
@@ -191,6 +196,13 @@ def main(argv: list[str] | None = None) -> None:
         from screener.universe_br import get_br_blue_chips
 
         run_cvm_ingest(get_br_blue_chips(), years=args.years, db_path=args.db)
+        return
+
+    if args.taxonomy == "dart-kr":
+        from pit_fundamentals.dart_kr_client import run_dart_ingest
+        from screener.universe_kr import get_kr_blue_chips
+
+        run_dart_ingest(get_kr_blue_chips(), years=[str(y) for y in args.years], db_path=args.db)
         return
 
     # The universe list lives in the screener package; imported lazily so

@@ -132,12 +132,14 @@ def build_pit_snapshot(
                         -- instant (balance-sheet/share) tags: fiscal-YEAR-END
                         -- values only, so YoY deltas compare annual balance
                         -- sheets, not a 10-Q/quarterly filing against an
-                        -- annual one. 'DFP' (Brazil/CVM) is unambiguously
-                        -- annual by construction — the quarterly form is
-                        -- 'ITR', a separate CVM dataset this project's
-                        -- cvm_br_client.py does not ingest.
+                        -- annual one. 'DFP' (Brazil/CVM) and 'DART-ANNUAL'
+                        -- (South Korea) are each unambiguously annual by
+                        -- construction — their respective quarterly forms
+                        -- ('ITR', DART reprt_code 11012-11014) are separate
+                        -- datasets this project's cvm_br_client.py and
+                        -- dart_kr_client.py do not ingest.
                         OR (f.tag NOT IN (SELECT tag FROM _flow_tags)
-                            AND (f.form LIKE '10-K%' OR f.form = 'DFP'))
+                            AND (f.form LIKE '10-K%' OR f.form IN ('DFP', 'DART-ANNUAL')))
                       )
             ),
             latest_filing AS (

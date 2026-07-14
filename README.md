@@ -64,8 +64,8 @@ CVM filings, not guessed) and maps CVM's standardized account codes
 (`CD_CONTA`, e.g. `"1.01"` = *Ativo Circulante*) onto the exact same
 canonical tags US-GAAP facts use (`Assets`, `NetIncomeLoss`, ...), so
 `screener/scores.py`'s Piotroski/Altman/Ohlson functions run **completely
-unmodified** on Brazilian filings. Real result from this run — 13 of 16
-scored successfully:
+unmodified** on Brazilian filings. Real result from this run (16 tickers,
+13 scored successfully):
 
 | Ticker | Sector | F-Score | O-Score |
 |---|---|---|---|
@@ -98,6 +98,42 @@ way to detect which from the file alone. Altman Z's market-cap term is
 therefore **not** reliable for CVM-sourced companies without a manual
 per-company scale check; F-Score and O-Score (neither needs market cap) are
 unaffected and were verified against hand-checked real filings.
+
+## International extension: South Korea / DART (⚠ NOT live-verified)
+
+`pit_fundamentals/dart_kr_client.py` adds a third taxonomy — Korea's DART
+OpenAPI, run by the Financial Supervisory Service — following the same
+"map to the shared canonical tags" design as the Brazil adapter. **Unlike
+Brazil, this one has not been run against a live API response.** DART
+requires a registered `crtfc_key` for every call, including its free
+company-code list, and no key was available while this was built. Every
+endpoint URL, parameter name, and response field is sourced from DART's
+official developer guide, cross-checked against a real worked example
+(Samsung Electronics' FY2019 filing tags current assets as
+`ifrs-full_CurrentAssets`) and an independent open-source project
+(DartLab) that documents Korean filers tagging the *same* concept three
+different ways — `ifrs-full_Revenue` (Samsung), `dart_Revenue` (SK Hynix),
+bare `Revenue` (LG Energy Solution) — which is why the code map tries
+prefix-stripped candidate names rather than one fixed lookup. But nothing
+here has been sanity-checked against real numbers. Before trusting any
+score derived from it:
+
+```bash
+export DART_API_KEY="your_free_key"   # register at https://opendart.fss.or.kr
+python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2023
+```
+
+`screener/universe_kr.py` ships with exactly **one** entry (Samsung
+Electronics, `005930`) — its `corp_code` is quoted from a published
+tutorial's worked example, not verified live either. Populate the rest
+yourself once you have a key (instructions in that file's docstring);
+inventing plausible-looking 8-digit corp_codes for other companies would
+silently point at the wrong data or nothing at all, which is worse than
+leaving them out. Long-term debt and shares outstanding are deliberately
+left unmapped (they need either a DART-specific extension tag or a
+separate API family this adapter doesn't call) — Piotroski's dilution
+check and Altman Z's market-cap term won't compute for Korean names as a
+result, but Ohlson O-Score needs neither and should work once tested.
 
 ## Setup
 
@@ -152,10 +188,12 @@ from pit_fundamentals import get_fact_as_of, build_pit_snapshot
 ```
 pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
   edgar_client.py     # SEC EDGAR HTTP client (rate-limited, cached)
-  cvm_br_client.py     # Brazil/CVM Dados Abertos adapter (second taxonomy)
-  ingest.py            # CLI: --taxonomy {us-gaap, cvm-br}
+  cvm_br_client.py     # Brazil/CVM Dados Abertos adapter (verified live)
+  dart_kr_client.py    # South Korea/DART adapter (NOT live-verified — see docstring)
+  ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr}
 screener/           # universe, scores, normalize, composite, backtest, validation
   universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk
+  universe_kr.py       # KOSPI crosswalk (1 verified entry, rest TODO — see docstring)
 dashboard/          # Plotly Dash app (6 views)
 tests/              # score formulas, normalization, CV-leakage guard, PIT-universe exclusion
 notebooks/          # colab_quickstart.ipynb — full pipeline end to end
