@@ -1,15 +1,15 @@
 """Tests for the South Korea/DART taxonomy adapter.
 
-*** ALL fixtures here are SYNTHETIC, not drawn from a real API response ***
-— unlike test_cvm_br_mapping.py, which mirrors real, downloaded CVM data.
-No DART API key was available while this project was built, so these tests
-only prove the account_id-normalization and rcept_dt-gating LOGIC is
-correct given DART's documented response shape; they cannot prove the
-CODE_MAP's specific tag choices match what DART actually returns for real
-companies. Field names (account_id, rcept_no, rcept_dt, thstrm_amount, ...)
-are taken from DART's official developer guide; the one concrete example
-value used below (account_id="ifrs-full_CurrentAssets") is quoted from a
-published worked example (Samsung Electronics FY2019), not invented.
+Fixtures below are synthetic (no network access during test runs), but the
+CODE_MAP/SUM_CODE_MAP mapping choices and the sj_div-filtering logic they
+exercise have since been confirmed against a live DART API key — see
+dart_kr_client.py's module docstring for the real Samsung Electronics
+verification (Assets = Liabilities + Equity exactly; O-Score computed
+end-to-end). Two of the tests below (SCE exclusion, long-term-debt
+summing) are direct regression tests for real bugs that verification pass
+caught. Field names (account_id, rcept_no, rcept_dt, thstrm_amount, ...)
+are taken from DART's official developer guide and the real response
+structure observed during that live verification.
 """
 
 from datetime import date
@@ -142,3 +142,46 @@ def test_require_api_key_raises_actionable_error_when_unset(monkeypatch):
 def test_require_api_key_returns_key_when_set(monkeypatch):
     monkeypatch.setenv("DART_API_KEY", "test_key_value")
     assert require_api_key() == "test_key_value"
+
+
+def test_sce_rows_excluded_even_though_account_id_matches(filings_df):
+    """Regression test for a real bug caught against Samsung Electronics'
+    live FY2023 filing: the Statement of Changes in Equity (sj_div='SCE')
+    tags SEVEN different real values under the identical account_id
+    'ifrs-full_Equity' — total equity, per-component balances, and
+    NCI-attributable vs. parent-attributable subtotals. Including SCE rows
+    produced silently conflicting StockholdersEquity facts for the same
+    (tag, fiscal_period_end). Only BS/IS/CF may ever be mapped."""
+    fin = pd.DataFrame(
+        [
+            _fin_row("ifrs-full_Equity", "BS", "1000", "900", "800"),  # the one authoritative total
+            _fin_row("ifrs-full_Equity", "SCE", "300", "270", "240"),  # e.g. a capital-surplus sub-component
+            _fin_row("ifrs-full_Equity", "SCE", "700", "630", "560"),  # e.g. NCI-attributable sub-component
+        ]
+    )
+    facts = facts_from_dataframes("TEST", "00000001", "2023", fin, filings_df)
+    equity = facts[facts["tag"] == "StockholdersEquity"]
+    # 3 rows expected (one per fiscal year from thstrm/frmtrm/bfefrmtrm
+    # expansion of the single BS row) — NOT 9 (which would include the two
+    # excluded SCE rows' own 3-period expansions), and the values must be
+    # exactly the BS figures, never the SCE sub-component figures.
+    assert len(equity) == 3
+    assert set(equity["value"]) == {800.0, 900.0, 1000.0}
+
+
+def test_long_term_debt_summed_from_bonds_and_loans(filings_df):
+    """Regression test mirroring the real Samsung structure: IFRS has no
+    single 'long-term debt' line — non-current bonds and non-current loans
+    are separate BS rows (confirmed real tags:
+    NoncurrentPortionOfNoncurrentBondsIssued +
+    NoncurrentPortionOfNoncurrentLoansReceived). LongTermDebtNoncurrent
+    must be their SUM, not one component silently dropped by dedup."""
+    fin = pd.DataFrame(
+        [
+            _fin_row("ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued", "BS", "537", "536", "508"),
+            _fin_row("ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived", "BS", "3724", "3560", "2866"),
+        ]
+    )
+    facts = facts_from_dataframes("TEST", "00000001", "2023", fin, filings_df)
+    debt = facts[facts["tag"] == "LongTermDebtNoncurrent"].sort_values("fiscal_period_end")
+    assert list(debt["value"]) == [pytest.approx(508 + 2866), pytest.approx(536 + 3560), pytest.approx(537 + 3724)]

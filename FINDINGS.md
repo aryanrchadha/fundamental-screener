@@ -229,44 +229,69 @@ from the file alone. Altman Z's market-cap term is flagged unreliable for
 CVM-sourced names as a result; this was caught by actually inspecting
 values against known real share counts, not assumed.
 
-## International extension (South Korea / DART): honest status — untested
+## International extension (South Korea / DART): from untested to verified
 
 A third taxonomy adapter, `pit_fundamentals/dart_kr_client.py`, targets
 Korea's DART OpenAPI (the natural next candidate after Brazil, per the
-prior extension's own recommendation). Its status is meaningfully weaker
-than the Brazil work above, and that difference is the finding worth
-recording here: **CVM required zero credentials, so every mapping in
-`cvm_br_client.py` was verified by downloading and grep'ing real 2022-2024
-filings before being committed. DART requires a registered API key
-(`crtfc_key`) for every single call — including the free company-code
-list — and none was available in this session.** Rather than proceed on
-memory or plausible-sounding guesses, research was restricted to DART's
-official developer documentation plus two independent, citable sources:
-a Korean quant-investing tutorial's worked example (confirming
-`account_id="ifrs-full_CurrentAssets"` for a real Samsung Electronics
-filing) and the open-source DartLab project's account-normalization
-documentation, which reveals that DART tagging is genuinely less
-consistent than CVM's centrally-fixed codes: the same concept appears as
-`ifrs-full_Revenue` (Samsung), `dart_Revenue` (SK Hynix), or bare
-`Revenue` (LG Energy Solution) depending on the filer. The code map
-handles this with prefix-stripped candidate matching rather than a single
-fixed lookup, but the mapping choices themselves are unverified beyond
-that one confirmed data point.
+prior extension's own recommendation). It was first built without a
+registered API key — DART requires one (`crtfc_key`) for every call,
+including the free company-code list, and none was available initially —
+using only official documentation plus two independently citable sources:
+a Korean quant-investing tutorial's worked example and the open-source
+DartLab project's documentation that DART tagging is genuinely less
+consistent than CVM's fixed codes (the same concept appears as
+`ifrs-full_Revenue`, `dart_Revenue`, or bare `Revenue` depending on the
+filer). A key was later obtained and the adapter was run against
+Samsung Electronics' real FY2022-2023 filings — the exercise is worth
+recording in full because it caught real bugs the pre-key version could
+not have:
 
-Consequently: the module is architecturally complete (filing-date gating
-via `rcept_dt`, restatement handling, the same canonical-tag contract) and
-covered by synthetic-fixture tests proving the *logic* is correct given
-DART's documented response shape — but zero real Korean company numbers
-have been produced or checked. Long-term debt and shares outstanding were
-deliberately left unmapped rather than guessed (they likely need either a
-DART-specific extension tag or a separate API endpoint family not used
-here), so Piotroski's dilution criterion and Altman Z's market-cap term
-will not compute for Korean names even once a key is supplied; Ohlson
-O-Score needs neither and is the one score expected to work immediately.
-`screener/universe_kr.py` ships with exactly one entry (Samsung
-Electronics) rather than a fabricated crosswalk, for the same reason.
-**Anyone using this adapter should treat every number it produces as
-provisional until checked against a real filing.**
+1. **The Statement of Changes in Equity trap.** Samsung's real filing
+   tags **seven different values** — total equity, per-component balances,
+   NCI- vs. parent-attributable net income subtotals — under the single
+   `account_id` `"ifrs-full_Equity"`, all within the SCE section alone.
+   The original code processed every statement section indiscriminately,
+   which would have silently produced conflicting `StockholdersEquity`
+   facts for the same fiscal year with no principled way to pick the
+   right one. Fix: only Balance Sheet / Income Statement / Cash Flow
+   sections are ever mapped; SCE (and the harmless-but-redundant CIS,
+   which merely duplicates the income statement's net income) are
+   excluded entirely.
+2. **The EBIT guess was wrong.** The original mapping guessed the core
+   IFRS concept `ProfitLossFromOperatingActivities` for operating income.
+   It never appears in Samsung's real filing — Samsung tags operating
+   income (영업이익) with the Korea-specific extension
+   `dart_OperatingIncomeLoss` instead, exactly the kind of tagging
+   divergence the module's own pre-key docstring had flagged as a risk
+   without being able to confirm it either way.
+3. **Long-term debt needed summing, not a single lookup.** IFRS has no
+   single "total long-term debt" line; Samsung's real filing confirms
+   non-current bonds and non-current bank loans are reported as two
+   separate Balance Sheet rows. The fix sums both confirmed real
+   component tags rather than guessing a combined line that doesn't
+   exist.
+
+**Post-fix, live-verified result**: `ifrs-full_Assets` (₩455.9T) equals
+`ifrs-full_Liabilities` (₩92.2T) plus `ifrs-full_Equity` (₩363.7T) exactly,
+and Ohlson O-Score computes end-to-end through the **unmodified**
+`screener/scores.py` functions, returning −14.8 — appropriately deep in
+distress-free territory for one of the world's largest, most stable
+companies. **Still incomplete**: only one company has been checked, and
+DART's financial-statement endpoint — confirmed by direct inspection, not
+assumed — carries no share-count field anywhere in its response (that
+data lives in a separate DART API family this adapter doesn't call), so
+Piotroski's dilution criterion and Altman Z's market-cap term remain
+uncomputable for Korean names; Ohlson O-Score is the one score confirmed
+working. `screener/universe_kr.py` still ships with exactly one entry
+(Samsung Electronics) rather than a fabricated crosswalk for other
+companies — extending it and re-verifying is future work.
+
+The meta-finding worth keeping: **the pre-key version's stated
+low-confidence flags were directionally correct** (it explicitly called
+out the EBIT mapping and the SCE-style risk as uncertain) but couldn't
+have caught the exact failure mode without a live response — this is the
+concrete argument for why "build without live testing, clearly flagged"
+is a reasonable fallback but not a substitute for the real thing.
 
 ## Bottom line
 

@@ -99,41 +99,49 @@ therefore **not** reliable for CVM-sourced companies without a manual
 per-company scale check; F-Score and O-Score (neither needs market cap) are
 unaffected and were verified against hand-checked real filings.
 
-## International extension: South Korea / DART (⚠ NOT live-verified)
+## International extension: South Korea / DART
 
 `pit_fundamentals/dart_kr_client.py` adds a third taxonomy — Korea's DART
 OpenAPI, run by the Financial Supervisory Service — following the same
-"map to the shared canonical tags" design as the Brazil adapter. **Unlike
-Brazil, this one has not been run against a live API response.** DART
+"map to the shared canonical tags" design as the Brazil adapter. DART
 requires a registered `crtfc_key` for every call, including its free
-company-code list, and no key was available while this was built. Every
-endpoint URL, parameter name, and response field is sourced from DART's
-official developer guide, cross-checked against a real worked example
-(Samsung Electronics' FY2019 filing tags current assets as
-`ifrs-full_CurrentAssets`) and an independent open-source project
-(DartLab) that documents Korean filers tagging the *same* concept three
-different ways — `ifrs-full_Revenue` (Samsung), `dart_Revenue` (SK Hynix),
-bare `Revenue` (LG Energy Solution) — which is why the code map tries
-prefix-stripped candidate names rather than one fixed lookup. But nothing
-here has been sanity-checked against real numbers. Before trusting any
-score derived from it:
+company-code list:
 
 ```bash
 export DART_API_KEY="your_free_key"   # register at https://opendart.fss.or.kr
-python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2023
+python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2022 2023
 ```
 
-`screener/universe_kr.py` ships with exactly **one** entry (Samsung
-Electronics, `005930`) — its `corp_code` is quoted from a published
-tutorial's worked example, not verified live either. Populate the rest
-yourself once you have a key (instructions in that file's docstring);
-inventing plausible-looking 8-digit corp_codes for other companies would
-silently point at the wrong data or nothing at all, which is worse than
-leaving them out. Long-term debt and shares outstanding are deliberately
-left unmapped (they need either a DART-specific extension tag or a
-separate API family this adapter doesn't call) — Piotroski's dilution
-check and Altman Z's market-cap term won't compute for Korean names as a
-result, but Ohlson O-Score needs neither and should work once tested.
+**Live-verified against Samsung Electronics' real FY2022-2023 filings**
+(`005930` / corp_code `00126380`, `screener/universe_kr.py`'s one entry).
+`ifrs-full_Assets` = ₩455.9T = `ifrs-full_Liabilities` (₩92.2T) +
+`ifrs-full_Equity` (₩363.7T) exactly, and Ohlson O-Score computed
+end-to-end through the **unmodified** `screener/scores.py` functions
+returns −14.8 — appropriately deep in distress-free territory for one of
+the world's largest companies.
+
+That verification pass caught two real bugs before they could ship: (1)
+the Statement of Changes in Equity section tags **seven different real
+values** under the identical `account_id` `"ifrs-full_Equity"` — total
+equity, per-component balances, NCI- vs. parent-attributable subtotals —
+so only the Balance Sheet/Income Statement/Cash Flow sections are ever
+mapped, never SCE; (2) the initial EBIT-candidate guess
+(`ProfitLossFromOperatingActivities`) never appears in the real filing —
+Samsung tags operating income with the Korea-specific extension
+`dart_OperatingIncomeLoss` instead, confirming the module's own
+low-confidence flag on that guess was warranted. Long-term debt (IFRS
+splits it across separate non-current-bonds and non-current-loans lines,
+confirmed real tags, now summed) needed similar care.
+
+**Still incomplete**: only one company has been checked, and DART's
+`fnlttSinglAcntAll` response — confirmed by direct inspection — carries no
+share-count field at all (it lives in a separate DART API family not
+called here), so Piotroski's dilution criterion and Altman Z's market-cap
+term won't compute for Korean names; Ohlson O-Score is the one score
+confirmed working. Populate more of `screener/universe_kr.py` yourself
+once you want other companies — inventing plausible-looking 8-digit
+corp_codes would silently point at the wrong data, which is worse than
+leaving them out.
 
 ## Setup
 
@@ -189,7 +197,7 @@ from pit_fundamentals import get_fact_as_of, build_pit_snapshot
 pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
   edgar_client.py     # SEC EDGAR HTTP client (rate-limited, cached)
   cvm_br_client.py     # Brazil/CVM Dados Abertos adapter (verified live)
-  dart_kr_client.py    # South Korea/DART adapter (NOT live-verified — see docstring)
+  dart_kr_client.py    # South Korea/DART adapter (live-verified on Samsung)
   ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr}
 screener/           # universe, scores, normalize, composite, backtest, validation
   universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk

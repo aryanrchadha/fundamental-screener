@@ -1,23 +1,31 @@
 """South Korea fundamentals adapter: DART OpenAPI -> canonical PIT tags.
 
-*** NOT LIVE-VERIFIED — READ BEFORE TRUSTING ANY OUTPUT FROM THIS MODULE ***
-Unlike pit_fundamentals/cvm_br_client.py (which was built by downloading and
-hand-inspecting real 2022-2024 CVM filings with zero credentials required),
-this module was written without a registered DART API key: the user did not
-have one available when this was built. Every endpoint URL, parameter name,
-and response field below is sourced from DART's official developer guide
-(engopendart.fss.or.kr) and cross-checked against a real worked example from
-an independent Korean quant-investing tutorial and the open-source DartLab
-project's account-normalization documentation — but nothing here has been
-exercised against a live API response. Get a free key at
-https://opendart.fss.or.kr (registration, no cost, typically instant
-approval), set it as the DART_API_KEY environment variable, and run:
+*** LIVE-VERIFIED against Samsung Electronics' real FY2022-2023 filings ***
+(corp_code 00126380). Assets/AssetsCurrent/Liabilities/LiabilitiesCurrent/
+StockholdersEquity/RetainedEarnings/Revenues/CostOfRevenue/GrossProfit/
+NetIncomeLoss/operating-cash-flow/EBIT/LongTermDebtNoncurrent all confirmed
+to produce internally-consistent real values (Assets = Liabilities + Equity
+exactly; Ohlson O-Score computed end-to-end through the UNMODIFIED
+screener/scores.py functions, returning -14.8 — appropriately deep in
+distress-free territory for one of the world's largest, most stable
+companies). Two real bugs were found and fixed by this verification: (1)
+the Statement of Changes in Equity section tags seven genuinely different
+values under the identical account_id `ifrs-full_Equity` — total equity,
+per-component balances, NCI- vs. parent-attributable subtotals — so only
+BS/IS/CF statement sections are ever mapped, never SCE (or the redundant
+CIS); (2) the EBIT candidate's initial guess
+(`ProfitLossFromOperatingActivities`) never appears in the real filing —
+Samsung uses the Korea-specific extension tag `dart_OperatingIncomeLoss`
+instead, now the primary candidate. See CODE_MAP's comment for exact
+verified figures.
 
-    python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2023
-
-...then diff the output against a known company's real financial statements
-before relying on this for anything. Treat every mapping below as a
-hypothesis, not a fact, until you've done that.
+NOT YET VERIFIED: only ONE company (Samsung) and one filing pattern have
+been checked. `screener/universe_kr.py` ships with exactly that one entry
+— extend it and re-verify before trusting other companies' numbers,
+especially ones with unusual capital structures. Long-term debt and shares
+outstanding both needed non-obvious handling even for this one company
+(see SUM_CODE_MAP and the "NOT MAPPED" section below); other filers may
+need further fixes this single verification pass couldn't surface.
 
 WHY SOUTH KOREA, AS THE NEXT "LEADING EM" AFTER BRAZIL: DART (Data Analysis,
 Retrieval and Transfer System), run by Korea's Financial Supervisory
@@ -44,21 +52,21 @@ _normalize_account_id before comparison), tried in order — the same
 tag-naming inconsistency (e.g. Revenues vs. SalesRevenueNet), just extended
 to also strip taxonomy namespace prefixes.
 
-WHAT IS DELIBERATELY NOT MAPPED (left as NaN rather than guessed): long-term
-debt and shares outstanding both need either a Korea-specific DART
-extension concept or a wholly separate DART endpoint (share count comes
-from a different API family, DS004, not the financial-statement endpoint
-used here) that could not be confirmed without a live call. Guessing a
-plausible-looking but wrong tag name is worse than leaving the field empty
-— a wrong tag can silently match real (wrong) data; an absent tag just
-means that score is excluded and logged, consistent with this project's
-"never fabricate" rule. Piotroski's share-dilution criterion and Altman
-Z's market-cap term are therefore NOT computable for DART-sourced companies
-until someone extends this module with a verified shares-outstanding
-source. Ohlson O-Score needs neither, and IS expected to be fully
-computable once this module is live-tested (it only needs Assets,
-Liabilities, AssetsCurrent, LiabilitiesCurrent, NetIncomeLoss for two years,
-and operating cash flow — all covered by the mappings below).
+WHAT IS DELIBERATELY NOT MAPPED (left as NaN rather than guessed): shares
+outstanding. Confirmed by inspecting Samsung's real fnlttSinglAcntAll
+response directly: no share-count field appears anywhere in it — this data
+genuinely lives in a separate DART API family (share/equity-composition
+endpoints, not called here), not just an unmapped tag within this
+response. Guessing a plausible-looking but wrong tag name is worse than
+leaving the field empty — a wrong tag can silently match real (wrong)
+data; an absent tag just means that score is excluded and logged,
+consistent with this project's "never fabricate" rule. Piotroski's
+share-dilution criterion and Altman Z's market-cap term are therefore NOT
+computable for DART-sourced companies until someone extends this module
+with a verified shares-outstanding source. Ohlson O-Score needs neither
+and IS confirmed working (Assets, Liabilities, AssetsCurrent,
+LiabilitiesCurrent, NetIncomeLoss for two years, and operating cash flow —
+all live-verified above).
 """
 
 from __future__ import annotations
@@ -84,17 +92,28 @@ ANNUAL_REPRT_CODE = "11011"  # 사업보고서 (Annual/Business Report) — conf
 FS_DIV_PRIORITY = ["CFS", "OFS"]  # Consolidated preferred, Individual/standalone fallback
 
 # canonical tag -> candidate account_id spellings, prefix-stripped and
-# lowercased before comparison (see _normalize_account_id). Only concepts
-# from the CORE IFRS Accounting Taxonomy are included — these names are
-# defined by the IFRS Foundation itself, independent of DART, which is why
-# they're trusted further than a DART-specific extension guess would be.
-# 'CurrentAssets' is the one entry confirmed against an actual DART API
-# response (Samsung Electronics FY2019); the rest follow the same standard
-# IFRS concept-naming convention but have not been individually confirmed
-# against a live DART response.
+# lowercased before comparison (see _normalize_account_id).
+#
+# *** LIVE-VERIFIED against Samsung Electronics' real FY2023 DART filing ***
+# (corp_code 00126380, rcept_no 20240312000736) as of the update that added
+# this comment. Confirmed real values, in KRW: Assets 455,905,980,000,000;
+# Liabilities 92,228,115,000,000; Equity 363,677,865,000,000 (these three
+# balance exactly: A = L + E); AssetsCurrent 195,936,557,000,000;
+# LiabilitiesCurrent 75,719,452,000,000; RetainedEarnings 346,652,238,000,000;
+# Revenue 258,935,494,000,000; CostOfSales 180,388,580,000,000; GrossProfit
+# 78,546,914,000,000; ProfitLoss 15,487,100,000,000; operating cash flow
+# 44,137,427,000,000. All of Assets/AssetsCurrent/Liabilities/
+# LiabilitiesCurrent/Equity/RetainedEarnings/Revenue/CostOfSales/GrossProfit/
+# ProfitLoss/CashFlowsFromUsedInOperatingActivities matched on the FIRST
+# candidate string with no fallback needed — every one of them appeared as
+# a plain `ifrs-full_<name>` tag for this filer. That does NOT prove every
+# Korean filer tags consistently (DartLab's documented Samsung/dart_/bare
+# split for Revenue is real and is exactly why candidate lists exist here,
+# not a single string) — it proves the concept-name choices for THESE tags
+# are correct for at least one large real filer.
 CODE_MAP: dict[str, list[str]] = {
     "Assets": ["Assets"],
-    "AssetsCurrent": ["CurrentAssets"],  # confirmed real example: ifrs-full_CurrentAssets
+    "AssetsCurrent": ["CurrentAssets"],
     "Liabilities": ["Liabilities"],
     "LiabilitiesCurrent": ["CurrentLiabilities"],
     "StockholdersEquity": ["Equity", "EquityAttributableToOwnersOfParent"],
@@ -107,13 +126,50 @@ CODE_MAP: dict[str, list[str]] = {
         "CashFlowsFromUsedInOperatingActivities",
         "CashFlowsFromUsedInOperatingActivitiesBeforeIncomeTaxesAndOtherItemsAffectingConciliation",
     ],
-    "EBIT": ["ProfitLossFromOperatingActivities"],  # IFRS "operating profit" — low confidence, see docstring
+    # Real Samsung filing uses the Korea-specific extension tag
+    # dart_OperatingIncomeLoss (labeled 영업이익, "operating income") for
+    # this line — NOT a core ifrs-full_ProfitLossFromOperatingActivities
+    # concept, confirming this module's original low-confidence flag on
+    # this specific mapping was warranted. Kept as a fallback in case some
+    # other filer uses the pure-IFRS spelling instead (per DartLab, tagging
+    # choice varies by company).
+    "EBIT": ["OperatingIncomeLoss", "ProfitLossFromOperatingActivities"],
 }
+
+# Canonical tags with NO single IFRS line item — computed as the SUM of
+# multiple confirmed real component account_ids instead. Long-term debt:
+# IFRS reports non-current bonds and non-current loans as separate lines;
+# Samsung's real filing confirms both exist as distinct BS rows
+# (ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued +
+# ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived) with no combined
+# "total non-current borrowings" line — summing them is the closest
+# analogue to US-GAAP's single LongTermDebtNoncurrent tag.
+SUM_CODE_MAP: dict[str, list[str]] = {
+    "LongTermDebtNoncurrent": [
+        "NoncurrentPortionOfNoncurrentBondsIssued",
+        "NoncurrentPortionOfNoncurrentLoansReceived",
+    ],
+}
+
+# DART's fnlttSinglAcntAll response includes FIVE statement sections
+# (sj_div): BS, IS, CIS, CF, SCE. Only BS/IS/CF are processed. CIS
+# (Comprehensive Income Statement) duplicates IS's ProfitLoss for a simple
+# filer, which is harmless but redundant. SCE (Statement of Changes in
+# Equity) is the one that matters: Samsung's real filing tags SEVEN
+# different rows as "ifrs-full_Equity" within SCE alone — total equity,
+# each equity component's beginning/ending balance, and NCI-attributable
+# vs. parent-attributable subtotals — all under the identical account_id.
+# Including SCE would silently produce conflicting values for the same
+# (tag, fiscal_period_end) key with no principled way to pick the right
+# one; BS already carries the single authoritative total-equity figure
+# (confirmed: it satisfies Assets = Liabilities + Equity exactly), so SCE
+# is excluded entirely rather than guessed at.
+MAPPABLE_STATEMENT_TYPES = {"BS", "IS", "CF"}
 
 # BS/balance-sheet items are instant facts (like US-GAAP's Assets); IS/CF
 # items are duration facts requiring the annual-period check in query.py.
 INSTANT_STATEMENT_TYPES = {"BS"}
-FLOW_STATEMENT_TYPES = {"IS", "CIS", "CF"}
+FLOW_STATEMENT_TYPES = {"IS", "CF"}
 
 
 def _normalize_account_id(raw: str) -> str:
@@ -130,6 +186,11 @@ def _normalize_account_id(raw: str) -> str:
 _CANDIDATE_LOOKUP: dict[str, str] = {
     _normalize_account_id(candidate): tag
     for tag, candidates in CODE_MAP.items()
+    for candidate in candidates
+}
+_SUM_CANDIDATE_LOOKUP: dict[str, str] = {
+    _normalize_account_id(candidate): tag
+    for tag, candidates in SUM_CODE_MAP.items()
     for candidate in candidates
 }
 
@@ -264,46 +325,83 @@ def facts_from_dataframes(
     DataFrames. Split out from extract_company_facts so tests can exercise
     the real mapping/gating logic with synthetic DataFrames — no network,
     no API key required."""
-    rows: list[dict] = []
-    for _, r in fin.iterrows():
-        canon = _CANDIDATE_LOOKUP.get(_normalize_account_id(r["account_id"]))
-        if canon is None:
-            continue
-        rcept_no = r["rcept_no"]
+    # Only BS/IS/CF rows are ever mapped — see MAPPABLE_STATEMENT_TYPES'
+    # comment for why SCE (and, harmlessly but redundantly, CIS) are
+    # excluded: SCE in particular tags multiple genuinely-different values
+    # (total equity, per-component balances, NCI- vs parent-attributable
+    # net income) under the SAME account_id, which a naive per-row loop
+    # would otherwise insert as silently conflicting facts.
+    fin = fin[fin["sj_div"].isin(MAPPABLE_STATEMENT_TYPES)]
+
+    def _filed_date_for(rcept_no):
         filed_row = filings[filings["rcept_no"] == rcept_no]
-        if filed_row.empty:
-            # This account row's own rcept_no isn't in our annual-filing
-            # index (e.g. amendment filed under a different rcept_no than
-            # what fnlttSinglAcntAll returned) — skip rather than guess a
-            # filed_date, consistent with never fabricating PIT gating data.
-            continue
-        filed_date = filed_row["rcept_dt"].iloc[0]
-        sj_div = r.get("sj_div")
-        is_flow = sj_div in FLOW_STATEMENT_TYPES
+        # This account row's own rcept_no isn't in our annual-filing index
+        # (e.g. amendment filed under a different rcept_no than what
+        # fnlttSinglAcntAll returned) — return None rather than guess a
+        # filed_date, consistent with never fabricating PIT gating data.
+        return None if filed_row.empty else filed_row["rcept_dt"].iloc[0]
+
+    def _periods(row) -> list[tuple[date, float]]:
+        out = []
         for period_key, amount_key in [
             ("thstrm", "thstrm_amount"), ("frmtrm", "frmtrm_amount"), ("bfefrmtrm", "bfefrmtrm_amount"),
         ]:
-            amount = r.get(amount_key)
+            amount = row.get(amount_key)
             if amount in (None, "", "-") or pd.isna(amount):
                 continue
             fiscal_year_offset = {"thstrm": 0, "frmtrm": 1, "bfefrmtrm": 2}[period_key]
             fiscal_period_end = date(int(bsns_year) - fiscal_year_offset, 12, 31)
-            rows.append(
-                {
-                    "cik": corp_code,
-                    "ticker": ticker,
-                    "tag": canon,
-                    "fiscal_period_end": fiscal_period_end,
-                    "start_date": date(fiscal_period_end.year, 1, 1) if is_flow else None,
-                    "filed_date": filed_date,
-                    "value": float(str(amount).replace(",", "")),
-                    "unit": "KRW",
-                    "form": "DART-ANNUAL",
-                    "fy": fiscal_period_end.year,
-                    "fp": "FY",
-                    "taxonomy": "dart-kr",
-                }
-            )
+            out.append((fiscal_period_end, float(str(amount).replace(",", ""))))
+        return out
+
+    def _make_row(canon, fiscal_period_end, value, filed_date, is_flow) -> dict:
+        return {
+            "cik": corp_code, "ticker": ticker, "tag": canon,
+            "fiscal_period_end": fiscal_period_end,
+            "start_date": date(fiscal_period_end.year, 1, 1) if is_flow else None,
+            "filed_date": filed_date, "value": value, "unit": "KRW",
+            "form": "DART-ANNUAL", "fy": fiscal_period_end.year, "fp": "FY",
+            "taxonomy": "dart-kr",
+        }
+
+    rows: list[dict] = []
+
+    # Single-candidate tags: first matching account_id per row wins.
+    for _, r in fin.iterrows():
+        canon = _CANDIDATE_LOOKUP.get(_normalize_account_id(r["account_id"]))
+        if canon is None:
+            continue
+        filed_date = _filed_date_for(r["rcept_no"])
+        if filed_date is None:
+            continue
+        is_flow = r.get("sj_div") in FLOW_STATEMENT_TYPES
+        for fiscal_period_end, value in _periods(r):
+            rows.append(_make_row(canon, fiscal_period_end, value, filed_date, is_flow))
+
+    # Sum-of-components tags (e.g. LongTermDebtNoncurrent = bonds + loans):
+    # accumulate every matching component's per-period value, keyed by
+    # (canon, rcept_no, fiscal_period_end), then emit ONE summed row —
+    # never one row per component (that would leave conflicting values
+    # under the same tag/period/filed_date, silently resolved by whichever
+    # pandas dedup happened to keep).
+    sums: dict[tuple[str, str, date], float] = {}
+    sum_filed_dates: dict[tuple[str, str, date], object] = {}
+    sum_is_flow: dict[str, bool] = {}
+    for _, r in fin.iterrows():
+        canon = _SUM_CANDIDATE_LOOKUP.get(_normalize_account_id(r["account_id"]))
+        if canon is None:
+            continue
+        filed_date = _filed_date_for(r["rcept_no"])
+        if filed_date is None:
+            continue
+        sum_is_flow[canon] = r.get("sj_div") in FLOW_STATEMENT_TYPES
+        for fiscal_period_end, value in _periods(r):
+            key = (canon, r["rcept_no"], fiscal_period_end)
+            sums[key] = sums.get(key, 0.0) + value
+            sum_filed_dates[key] = filed_date
+    for (canon, _rcept_no, fiscal_period_end), total in sums.items():
+        key = (canon, _rcept_no, fiscal_period_end)
+        rows.append(_make_row(canon, fiscal_period_end, total, sum_filed_dates[key], sum_is_flow[canon]))
 
     if not rows:
         return pd.DataFrame()
@@ -322,8 +420,9 @@ def run_dart_ingest(
     cache_path: str = "data/http_cache",
 ) -> None:
     """Ingest DART data for a ticker->corp_code crosswalk into the shared
-    PIT database. Requires DART_API_KEY. NOT LIVE-VERIFIED — see module
-    docstring."""
+    PIT database. Requires DART_API_KEY. Mapping verified against Samsung
+    Electronics' real filings — see module docstring for exactly what was
+    and wasn't checked before extending to other companies."""
     api_key = require_api_key()
     from pit_fundamentals.schema import connect, init_db
 
@@ -353,6 +452,5 @@ def run_dart_ingest(
             total += len(facts)
             log.info("%s (%s): %d facts loaded for %s", ticker, corp_code, len(facts), year)
     con.close()
-    log.info("DART ingest complete: %d fact rows across %d tickers, %d years — "
-             "NOT LIVE-VERIFIED, sanity-check these numbers against a real filing.",
+    log.info("DART ingest complete: %d fact rows across %d tickers, %d years",
              total, len(tickers_corp_codes), len(years))
