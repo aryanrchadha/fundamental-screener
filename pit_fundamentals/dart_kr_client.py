@@ -1,31 +1,42 @@
 """South Korea fundamentals adapter: DART OpenAPI -> canonical PIT tags.
 
-*** LIVE-VERIFIED against Samsung Electronics' real FY2022-2023 filings ***
-(corp_code 00126380). Assets/AssetsCurrent/Liabilities/LiabilitiesCurrent/
-StockholdersEquity/RetainedEarnings/Revenues/CostOfRevenue/GrossProfit/
-NetIncomeLoss/operating-cash-flow/EBIT/LongTermDebtNoncurrent all confirmed
-to produce internally-consistent real values (Assets = Liabilities + Equity
-exactly; Ohlson O-Score computed end-to-end through the UNMODIFIED
-screener/scores.py functions, returning -14.8 — appropriately deep in
-distress-free territory for one of the world's largest, most stable
-companies). Two real bugs were found and fixed by this verification: (1)
-the Statement of Changes in Equity section tags seven genuinely different
-values under the identical account_id `ifrs-full_Equity` — total equity,
-per-component balances, NCI- vs. parent-attributable subtotals — so only
-BS/IS/CF statement sections are ever mapped, never SCE (or the redundant
-CIS); (2) the EBIT candidate's initial guess
-(`ProfitLossFromOperatingActivities`) never appears in the real filing —
-Samsung uses the Korea-specific extension tag `dart_OperatingIncomeLoss`
-instead, now the primary candidate. See CODE_MAP's comment for exact
-verified figures.
+*** LIVE-VERIFIED against 21 real KOSPI blue chips, FY2022-2023 ***
+(`screener/universe_kr.py`; corp_codes resolved from DART's own corpCode
+registry, never from memory). Verification standard: the accounting
+identity Assets = Liabilities + StockholdersEquity must hold EXACTLY on
+extracted values — 37/40 company-years pass; the other 3 are the FY2022
+financial institutions, for which DART itself returns status 013 "no data"
+(this endpoint's documented historical exclusion of financials; their
+coverage begins FY2023). Ohlson O-Score computes end-to-end through the
+UNMODIFIED screener/scores.py functions for all 18 non-financials, with an
+economically coherent ranking: Samsung Electronics safest (-14.85),
+debt-laden KEPCO worst (-9.39), SK Hynix mid-pack (-11.14, consistent
+with its 2023 memory-downcycle loss year).
 
-NOT YET VERIFIED: only ONE company (Samsung) and one filing pattern have
-been checked. `screener/universe_kr.py` ships with exactly that one entry
-— extend it and re-verify before trusting other companies' numbers,
-especially ones with unusual capital structures. Long-term debt and shares
-outstanding both needed non-obvious handling even for this one company
-(see SUM_CODE_MAP and the "NOT MAPPED" section below); other filers may
-need further fixes this single verification pass couldn't surface.
+FIVE real bugs were found and fixed across the two live-verification
+passes — each is now a regression test in tests/test_dart_kr_mapping.py:
+(1) SCE (Statement of Changes in Equity) tags seven genuinely different
+values under the identical account_id `ifrs-full_Equity`, so it is never
+mapped; (2) the EBIT candidate's initial guess
+(`ProfitLossFromOperatingActivities`) never appears in real filings —
+filers use the Korea-specific extension `dart_OperatingIncomeLoss`, now
+the primary candidate; (3) candidate PRIORITY must be enforced, not left
+to filing row order: SK Hynix's balance sheets carry both total Equity and
+parent-attributable Equity as separate rows and flipped their order
+between FY2022 and FY2023, silently swapping which one survived dedup;
+(4) single-statement filers (SK Hynix, NAVER, Kakao, Amorepacific) put
+their ENTIRE income statement under sj_div='CIS' with no 'IS' section —
+an earlier revision excluded CIS and lost all their income facts; (5) for
+restated years DART serves figures from documents received up to two
+years after fiscal year end (Hyundai Motor's and Kakao's FY2022 came from
+March-2024 documents), outside the original filing-search window — the
+window is now +1..+2 years with a validated rcept_no date-prefix fallback
+(first 8 digits = receipt date, empirically confirmed on four filings).
+
+STILL NOT COVERED: shares outstanding (absent from this endpoint entirely
+— see the "NOT MAPPED" section below), so Piotroski and Altman Z remain
+uncomputable for Korean names; and filers outside these 21 may use tag
+spellings or statement layouts this sweep didn't encounter.
 
 WHY SOUTH KOREA, AS THE NEXT "LEADING EM" AFTER BRAZIL: DART (Data Analysis,
 Retrieval and Transfer System), run by Korea's Financial Supervisory
@@ -152,24 +163,39 @@ SUM_CODE_MAP: dict[str, list[str]] = {
 }
 
 # DART's fnlttSinglAcntAll response includes FIVE statement sections
-# (sj_div): BS, IS, CIS, CF, SCE. Only BS/IS/CF are processed. CIS
-# (Comprehensive Income Statement) duplicates IS's ProfitLoss for a simple
-# filer, which is harmless but redundant. SCE (Statement of Changes in
-# Equity) is the one that matters: Samsung's real filing tags SEVEN
-# different rows as "ifrs-full_Equity" within SCE alone — total equity,
-# each equity component's beginning/ending balance, and NCI-attributable
-# vs. parent-attributable subtotals — all under the identical account_id.
-# Including SCE would silently produce conflicting values for the same
-# (tag, fiscal_period_end) key with no principled way to pick the right
-# one; BS already carries the single authoritative total-equity figure
-# (confirmed: it satisfies Assets = Liabilities + Equity exactly), so SCE
-# is excluded entirely rather than guessed at.
-MAPPABLE_STATEMENT_TYPES = {"BS", "IS", "CF"}
+# (sj_div): BS, IS, CIS, CF, SCE. BS/IS/CIS/CF are processed; SCE never is.
+#
+# CIS (Statement of Comprehensive Income) must be INCLUDED — learned from
+# the live 20-company sweep, not assumed: IFRS permits either a two-
+# statement presentation (separate income statement `IS` + comprehensive
+# income `CIS`; Samsung files this way, where CIS merely duplicates IS's
+# ProfitLoss) or a SINGLE combined statement — and single-statement filers
+# (SK Hynix, NAVER, Kakao, Amorepacific all confirmed from real FY2023
+# responses) carry their ENTIRE income statement (Revenue, CostOfSales,
+# GrossProfit, ProfitLoss, OperatingIncomeLoss) under sj_div='CIS' with NO
+# IS section at all. Excluding CIS (an earlier revision of this module did)
+# silently dropped every income-statement fact for those filers. For dual-
+# statement filers the IS and CIS copies of a mapped tag carry identical
+# values, so the (tag, fiscal_period_end, filed_date) dedup collapses them
+# harmlessly. CIS-only concepts (ComprehensiveIncome, OCI components,
+# NCI-attributable splits) have their own distinct account_ids that simply
+# aren't in CODE_MAP.
+#
+# SCE (Statement of Changes in Equity) stays excluded: Samsung's real
+# filing tags SEVEN different rows as "ifrs-full_Equity" within SCE alone
+# — total equity, each equity component's beginning/ending balance, and
+# NCI-attributable vs. parent-attributable subtotals — all under the
+# identical account_id. Including SCE would produce conflicting values for
+# the same (tag, fiscal_period_end) key with no principled way to pick the
+# right one; BS already carries the single authoritative equity figure
+# (confirmed: it satisfies Assets = Liabilities + Equity exactly).
+MAPPABLE_STATEMENT_TYPES = {"BS", "IS", "CIS", "CF"}
 
-# BS/balance-sheet items are instant facts (like US-GAAP's Assets); IS/CF
-# items are duration facts requiring the annual-period check in query.py.
+# BS/balance-sheet items are instant facts (like US-GAAP's Assets);
+# IS/CIS/CF items are duration facts requiring the annual-period check in
+# query.py.
 INSTANT_STATEMENT_TYPES = {"BS"}
-FLOW_STATEMENT_TYPES = {"IS", "CF"}
+FLOW_STATEMENT_TYPES = {"IS", "CIS", "CF"}
 
 
 def _normalize_account_id(raw: str) -> str:
@@ -183,10 +209,19 @@ def _normalize_account_id(raw: str) -> str:
     return s.lower()
 
 
-_CANDIDATE_LOOKUP: dict[str, str] = {
-    _normalize_account_id(candidate): tag
+# normalized candidate spelling -> (canonical tag, priority). Priority is
+# the candidate's position in CODE_MAP's list and MUST be enforced when a
+# filing contains MORE THAN ONE candidate for the same tag: SK Hynix's real
+# FY2022 and FY2023 balance sheets both carry ifrs-full_Equity (total, incl
+# noncontrolling interests) AND ifrs-full_EquityAttributableToOwnersOfParent
+# as separate rows, and the template's row ORDER flipped between the two
+# years — resolving the collision by response order (the original bug)
+# kept parent-only equity for FY2022 and total equity for FY2023, breaking
+# Assets = Liabilities + Equity by exactly the ₩24.2B of NCI in 2022.
+_CANDIDATE_LOOKUP: dict[str, tuple[str, int]] = {
+    _normalize_account_id(candidate): (tag, priority)
     for tag, candidates in CODE_MAP.items()
-    for candidate in candidates
+    for priority, candidate in enumerate(candidates)
 }
 _SUM_CANDIDATE_LOOKUP: dict[str, str] = {
     _normalize_account_id(candidate): tag
@@ -307,13 +342,19 @@ def extract_company_facts(
     if fin.empty:
         return pd.DataFrame()
 
+    # Filing-index window: FY-end + 1 year THROUGH FY-end + 2 years.
+    # Originally Jan-Jun of year+1 ("annual reports file within ~90 days"),
+    # which live verification proved too narrow: for FY2022,
+    # fnlttSinglAcntAll returned Hyundai Motor's and Kakao's figures from
+    # documents received in MARCH 2024 (rcept_no 20240314…/20240320…) —
+    # DART serves each bsns_year's statements from the latest document
+    # containing them, which for a restated/re-reported year is a filing
+    # up to two years after fiscal year end.
     year_start = f"{int(bsns_year) + 1}0101"
-    year_end = f"{int(bsns_year) + 1}0630"  # annual reports file within ~90 days of FYE
+    year_end = f"{int(bsns_year) + 2}1231"
     filings = search_annual_filings(api_key, corp_code, year_start, year_end, cache_path=cache_path)
-    if filings.empty:
-        log.warning("%s: no annual filing found in list.json for FY%s — cannot resolve filed_date", ticker, bsns_year)
-        return pd.DataFrame()
-
+    # An empty index is no longer fatal: facts_from_dataframes can fall
+    # back to the rcept_no date prefix (see _filed_date_for's comment).
     return facts_from_dataframes(ticker, corp_code, bsns_year, fin, filings)
 
 
@@ -334,12 +375,32 @@ def facts_from_dataframes(
     fin = fin[fin["sj_div"].isin(MAPPABLE_STATEMENT_TYPES)]
 
     def _filed_date_for(rcept_no):
-        filed_row = filings[filings["rcept_no"] == rcept_no]
-        # This account row's own rcept_no isn't in our annual-filing index
-        # (e.g. amendment filed under a different rcept_no than what
-        # fnlttSinglAcntAll returned) — return None rather than guess a
-        # filed_date, consistent with never fabricating PIT gating data.
-        return None if filed_row.empty else filed_row["rcept_dt"].iloc[0]
+        if not filings.empty:
+            filed_row = filings[filings["rcept_no"] == rcept_no]
+            if not filed_row.empty:
+                return filed_row["rcept_dt"].iloc[0]
+        # Fallback: the first 8 digits of rcept_no ARE the receipt date.
+        # This is not an assumption — it was empirically confirmed against
+        # four independent real filings where both fields were visible
+        # side by side in list.json (SK Hynix 20230321001209 ↔ 2023-03-21,
+        # Hyundai Motor 20230315001030 ↔ 2023-03-15, KB Financial
+        # 20230316001417 ↔ 2023-03-16 and 20230324001073 ↔ 2023-03-24).
+        # Guarded anyway: the prefix must parse as a real calendar date
+        # AND land within [bsns_year, bsns_year+4] — anything else means
+        # the rcept_no is malformed and the row is dropped rather than
+        # gated on a fabricated date.
+        try:
+            parsed = pd.Timestamp(str(rcept_no)[:8]).date()
+        except (ValueError, TypeError):
+            log.warning("%s: rcept_no %r has no parseable date prefix — row dropped", ticker, rcept_no)
+            return None
+        if not (int(bsns_year) <= parsed.year <= int(bsns_year) + 4):
+            log.warning("%s: rcept_no %r date prefix %s implausible for FY%s — row dropped",
+                        ticker, rcept_no, parsed, bsns_year)
+            return None
+        log.info("%s: filed_date for rcept_no %s resolved from its date prefix (%s) — "
+                 "not found in the list.json filing index", ticker, rcept_no, parsed)
+        return parsed
 
     def _periods(row) -> list[tuple[date, float]]:
         out = []
@@ -366,17 +427,26 @@ def facts_from_dataframes(
 
     rows: list[dict] = []
 
-    # Single-candidate tags: first matching account_id per row wins.
+    # Direct-mapped tags. Each emitted row carries its candidate's priority
+    # (position in CODE_MAP's list) so that when a filing tags MULTIPLE
+    # candidates for the same canonical tag — e.g. total Equity AND
+    # parent-attributable Equity as separate real BS rows — the dedup below
+    # keeps the highest-priority one deterministically, not whichever row
+    # the filing template happened to emit first (see _CANDIDATE_LOOKUP's
+    # comment for the real SK Hynix bug this fixed).
     for _, r in fin.iterrows():
-        canon = _CANDIDATE_LOOKUP.get(_normalize_account_id(r["account_id"]))
-        if canon is None:
+        hit = _CANDIDATE_LOOKUP.get(_normalize_account_id(r["account_id"]))
+        if hit is None:
             continue
+        canon, priority = hit
         filed_date = _filed_date_for(r["rcept_no"])
         if filed_date is None:
             continue
         is_flow = r.get("sj_div") in FLOW_STATEMENT_TYPES
         for fiscal_period_end, value in _periods(r):
-            rows.append(_make_row(canon, fiscal_period_end, value, filed_date, is_flow))
+            row = _make_row(canon, fiscal_period_end, value, filed_date, is_flow)
+            row["_priority"] = priority
+            rows.append(row)
 
     # Sum-of-components tags (e.g. LongTermDebtNoncurrent = bonds + loans):
     # accumulate every matching component's per-period value, keyed by
@@ -401,13 +471,20 @@ def facts_from_dataframes(
             sum_filed_dates[key] = filed_date
     for (canon, _rcept_no, fiscal_period_end), total in sums.items():
         key = (canon, _rcept_no, fiscal_period_end)
-        rows.append(_make_row(canon, fiscal_period_end, total, sum_filed_dates[key], sum_is_flow[canon]))
+        row = _make_row(canon, fiscal_period_end, total, sum_filed_dates[key], sum_is_flow[canon])
+        row["_priority"] = 0  # summed tags have no competing candidates
+        rows.append(row)
 
     if not rows:
         return pd.DataFrame()
     out = pd.DataFrame(rows)
-    out = out.drop_duplicates(subset=["tag", "fiscal_period_end", "filed_date"])
-    out = out.sort_values(["tag", "fiscal_period_end", "filed_date"])
+    # Priority-aware dedup: within one (tag, fiscal_period_end, filed_date),
+    # the lowest _priority candidate wins. sort is stable, so ties keep
+    # response order — but ties only occur between rows of the SAME
+    # candidate spelling, where values are identical anyway.
+    out = out.sort_values(["tag", "fiscal_period_end", "filed_date", "_priority"])
+    out = out.drop_duplicates(subset=["tag", "fiscal_period_end", "filed_date"], keep="first")
+    out = out.drop(columns=["_priority"])
     first_filing = out.groupby(["tag", "fiscal_period_end"], dropna=False)["filed_date"].transform("min")
     out["is_restatement"] = out["filed_date"] > first_filing
     return out

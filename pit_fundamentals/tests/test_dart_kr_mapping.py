@@ -169,6 +169,91 @@ def test_sce_rows_excluded_even_though_account_id_matches(filings_df):
     assert set(equity["value"]) == {800.0, 900.0, 1000.0}
 
 
+def test_equity_candidate_priority_beats_response_order(filings_df):
+    """Regression test for a real bug caught in the 20-company live sweep:
+    SK Hynix's FY2022 and FY2023 balance sheets both carry
+    ifrs-full_Equity (total, incl NCI) AND
+    ifrs-full_EquityAttributableToOwnersOfParent as separate rows, and the
+    template's ROW ORDER flipped between years. Resolving the collision by
+    response order kept parent-only equity for FY2022 (breaking
+    Assets = Liabilities + Equity by exactly the NCI amount). The
+    higher-priority candidate (total Equity, first in CODE_MAP's list)
+    must win regardless of which row the filing emits first."""
+    # Parent-attributable row FIRST — the FY2022-style ordering that broke.
+    fin = pd.DataFrame(
+        [
+            _fin_row("ifrs-full_EquityAttributableToOwnersOfParent", "BS", "63266", "60000", "58000"),
+            _fin_row("ifrs-full_Equity", "BS", "63290", "60020", "58015"),
+        ]
+    )
+    facts = facts_from_dataframes("TEST", "00000001", "2023", fin, filings_df)
+    eq = facts[(facts["tag"] == "StockholdersEquity") & (facts["fiscal_period_end"] == date(2023, 12, 31))]
+    assert len(eq) == 1
+    assert eq["value"].iloc[0] == 63290.0  # the TOTAL, not the parent-only row
+
+    # And the reverse ordering (FY2023-style) must give the same answer.
+    fin_rev = pd.DataFrame(
+        [
+            _fin_row("ifrs-full_Equity", "BS", "63290", "60020", "58015"),
+            _fin_row("ifrs-full_EquityAttributableToOwnersOfParent", "BS", "63266", "60000", "58000"),
+        ]
+    )
+    facts_rev = facts_from_dataframes("TEST", "00000001", "2023", fin_rev, filings_df)
+    eq_rev = facts_rev[(facts_rev["tag"] == "StockholdersEquity") & (facts_rev["fiscal_period_end"] == date(2023, 12, 31))]
+    assert eq_rev["value"].iloc[0] == 63290.0
+
+
+def test_single_statement_filers_income_statement_lives_in_cis(filings_df):
+    """Regression test for a real bug caught in the live sweep: SK Hynix,
+    NAVER, Kakao, and Amorepacific present a SINGLE combined statement of
+    comprehensive income — their entire income statement (Revenue,
+    ProfitLoss, ...) is under sj_div='CIS' with no 'IS' section at all. An
+    earlier revision excluded CIS entirely (correct for Samsung's
+    two-statement format, fatal for these filers)."""
+    fin = pd.DataFrame(
+        [
+            _fin_row("ifrs-full_Assets", "BS", "1000", "900", "800"),
+            _fin_row("ifrs-full_Revenue", "CIS", "500", "450", "400"),
+            _fin_row("ifrs-full_ProfitLoss", "CIS", "50", "40", "30"),
+        ]
+    )
+    facts = facts_from_dataframes("TEST", "00000001", "2023", fin, filings_df)
+    rev = facts[(facts["tag"] == "Revenues") & (facts["fiscal_period_end"] == date(2023, 12, 31))]
+    ni = facts[(facts["tag"] == "NetIncomeLoss") & (facts["fiscal_period_end"] == date(2023, 12, 31))]
+    assert rev["value"].iloc[0] == 500.0
+    assert ni["value"].iloc[0] == 50.0
+    # CIS rows are flow facts — they must carry a start_date for the
+    # annual-duration filter in query.py.
+    assert rev["start_date"].iloc[0] == date(2023, 1, 1)
+
+
+def test_filed_date_falls_back_to_rcept_no_date_prefix():
+    """Regression test for a real bug caught in the live sweep: for FY2022,
+    DART served Hyundai Motor's and Kakao's figures from documents received
+    in March 2024 (year+2), outside the original Jan-Jun year+1 filing
+    search window — those rows were silently dropped. The first 8 digits of
+    rcept_no ARE the receipt date (empirically confirmed on four real
+    filings), so an index miss now falls back to the validated prefix."""
+    fin = pd.DataFrame(
+        [_fin_row("ifrs-full_Assets", "BS", "1000", "900", "800", rcept_no="20240314001531")]
+    )
+    empty_filings = pd.DataFrame(columns=["corp_code", "rcept_no", "rcept_dt", "report_nm"])
+    facts = facts_from_dataframes("TEST", "00000001", "2022", fin, empty_filings)
+    assert not facts.empty
+    assert (facts["filed_date"] == date(2024, 3, 14)).all()
+
+
+def test_implausible_rcept_no_prefix_still_dropped():
+    """The prefix fallback is guarded: a date outside [bsns_year,
+    bsns_year+4] means the rcept_no is malformed — drop, don't gate on it."""
+    fin = pd.DataFrame(
+        [_fin_row("ifrs-full_Assets", "BS", "1000", "900", "800", rcept_no="20500101000001")]
+    )
+    empty_filings = pd.DataFrame(columns=["corp_code", "rcept_no", "rcept_dt", "report_nm"])
+    facts = facts_from_dataframes("TEST", "00000001", "2022", fin, empty_filings)
+    assert facts.empty
+
+
 def test_long_term_debt_summed_from_bonds_and_loans(filings_df):
     """Regression test mirroring the real Samsung structure: IFRS has no
     single 'long-term debt' line — non-current bonds and non-current loans

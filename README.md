@@ -112,36 +112,50 @@ export DART_API_KEY="your_free_key"   # register at https://opendart.fss.or.kr
 python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2022 2023
 ```
 
-**Live-verified against Samsung Electronics' real FY2022-2023 filings**
-(`005930` / corp_code `00126380`, `screener/universe_kr.py`'s one entry).
-`ifrs-full_Assets` = ₩455.9T = `ifrs-full_Liabilities` (₩92.2T) +
-`ifrs-full_Equity` (₩363.7T) exactly, and Ohlson O-Score computed
-end-to-end through the **unmodified** `screener/scores.py` functions
-returns −14.8 — appropriately deep in distress-free territory for one of
-the world's largest companies.
+**Live-verified against 21 real KOSPI blue chips, FY2022-2023**
+(`screener/universe_kr.py` — every corp_code resolved from DART's own
+118,508-entity corpCode registry by KRX stock code, none from memory).
+The verification standard is the accounting identity **Assets =
+Liabilities + Equity holding exactly** on extracted values: 37/40
+company-years pass; the other three are the FY2022 financial institutions,
+for which DART itself returns status 013 "no data" (the endpoint's
+documented historical exclusion of financials — their coverage begins
+FY2023). Ohlson O-Score, computed through the **unmodified**
+`screener/scores.py` functions, scores all 18 non-financials with an
+economically coherent ranking:
 
-That verification pass caught two real bugs before they could ship: (1)
-the Statement of Changes in Equity section tags **seven different real
-values** under the identical `account_id` `"ifrs-full_Equity"` — total
-equity, per-component balances, NCI- vs. parent-attributable subtotals —
-so only the Balance Sheet/Income Statement/Cash Flow sections are ever
-mapped, never SCE; (2) the initial EBIT-candidate guess
-(`ProfitLossFromOperatingActivities`) never appears in the real filing —
-Samsung tags operating income with the Korea-specific extension
-`dart_OperatingIncomeLoss` instead, confirming the module's own
-low-confidence flag on that guess was warranted. Long-term debt (IFRS
-splits it across separate non-current-bonds and non-current-loans lines,
-confirmed real tags, now summed) needed similar care.
+| Rank | Company | O-Score | Reads as |
+|---|---|---|---|
+| Safest | Samsung Electronics | −14.85 | fortress balance sheet |
+| … | Celltrion, Hyundai Mobis, Amorepacific | −13.5 to −13.3 | cash-rich |
+| Mid | SK Hynix | −11.14 | 2023 memory-downcycle loss year |
+| … | Kakao | −10.76 | ₩1.8T net loss in 2023 |
+| Riskiest | KEPCO | −9.39 | famously debt-laden utility |
+| Excluded | KB, Shinhan, Samsung Life | — | liquidity-order balance sheets, no current/non-current split |
 
-**Still incomplete**: only one company has been checked, and DART's
-`fnlttSinglAcntAll` response — confirmed by direct inspection — carries no
-share-count field at all (it lives in a separate DART API family not
-called here), so Piotroski's dilution criterion and Altman Z's market-cap
-term won't compute for Korean names; Ohlson O-Score is the one score
-confirmed working. Populate more of `screener/universe_kr.py` yourself
-once you want other companies — inventing plausible-looking 8-digit
-corp_codes would silently point at the wrong data, which is worse than
-leaving them out.
+The two live-verification passes caught **five real bugs**, each now a
+regression test: (1) SCE tags seven different values under the identical
+`account_id` `"ifrs-full_Equity"`, so it's never mapped; (2) the initial
+EBIT guess never appears in real filings — filers use the Korea-specific
+`dart_OperatingIncomeLoss`; (3) candidate **priority** must be enforced,
+not left to filing row order — SK Hynix's balance sheets carry both total
+and parent-attributable equity as separate rows and *flipped their order
+between FY2022 and FY2023*, silently swapping which survived dedup and
+breaking the accounting identity by exactly the NCI amount; (4)
+single-statement filers (SK Hynix, NAVER, Kakao, Amorepacific) put their
+entire income statement under `sj_div='CIS'` with no `IS` section — an
+earlier revision excluded CIS and silently lost all their income facts;
+(5) for restated years DART serves figures from documents received up to
+two years after fiscal year end, so the filing-date search window is now
++1..+2 years with a validated `rcept_no` date-prefix fallback (first 8
+digits = receipt date, empirically confirmed on four real filings).
+
+**Still incomplete**: DART's `fnlttSinglAcntAll` response — confirmed by
+direct inspection — carries no share-count field (it lives in a separate
+DART API family not called here), so Piotroski's dilution criterion and
+Altman Z's market-cap term won't compute for Korean names; Ohlson O-Score
+is the confirmed-working score. Filers outside these 21 may use tag
+spellings or statement layouts the sweep didn't encounter.
 
 ## Setup
 
@@ -201,7 +215,7 @@ pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
   ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr}
 screener/           # universe, scores, normalize, composite, backtest, validation
   universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk
-  universe_kr.py       # KOSPI crosswalk (1 verified entry, rest TODO — see docstring)
+  universe_kr.py       # KOSPI crosswalk (21 names, registry-resolved + live-verified)
 dashboard/          # Plotly Dash app (6 views)
 tests/              # score formulas, normalization, CV-leakage guard, PIT-universe exclusion
 notebooks/          # colab_quickstart.ipynb — full pipeline end to end

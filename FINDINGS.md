@@ -276,15 +276,12 @@ not have:
 and Ohlson O-Score computes end-to-end through the **unmodified**
 `screener/scores.py` functions, returning −14.8 — appropriately deep in
 distress-free territory for one of the world's largest, most stable
-companies. **Still incomplete**: only one company has been checked, and
-DART's financial-statement endpoint — confirmed by direct inspection, not
-assumed — carries no share-count field anywhere in its response (that
-data lives in a separate DART API family this adapter doesn't call), so
-Piotroski's dilution criterion and Altman Z's market-cap term remain
-uncomputable for Korean names; Ohlson O-Score is the one score confirmed
-working. `screener/universe_kr.py` still ships with exactly one entry
-(Samsung Electronics) rather than a fabricated crosswalk for other
-companies — extending it and re-verifying is future work.
+companies. DART's financial-statement endpoint — confirmed by direct
+inspection, not assumed — carries no share-count field anywhere in its
+response (that data lives in a separate DART API family this adapter
+doesn't call), so Piotroski's dilution criterion and Altman Z's market-cap
+term remain uncomputable for Korean names; Ohlson O-Score is the one
+score confirmed working.
 
 The meta-finding worth keeping: **the pre-key version's stated
 low-confidence flags were directionally correct** (it explicitly called
@@ -292,6 +289,64 @@ out the EBIT mapping and the SCE-style risk as uncertain) but couldn't
 have caught the exact failure mode without a live response — this is the
 concrete argument for why "build without live testing, clearly flagged"
 is a reasonable fallback but not a substitute for the real thing.
+
+### The 21-name crosswalk sweep: three more real bugs
+
+The crosswalk was then extended from Samsung alone to **21 KOSPI blue
+chips**, every corp_code resolved from DART's own 118,508-entity corpCode
+registry by KRX stock code (never from memory), each then live-verified
+against the accounting identity Assets = Liabilities + Equity holding
+*exactly* on extracted values. The first sweep failed the identity for 15
+of 20 FY2022 extractions and returned 5 as empty — and every failure
+traced to a real, distinct data-shape issue Samsung's filings alone could
+never have revealed:
+
+1. **Candidate priority vs. filing row order.** SK Hynix's FY2022 and
+   FY2023 balance sheets both carry `ifrs-full_Equity` (total, including
+   noncontrolling interests) *and*
+   `ifrs-full_EquityAttributableToOwnersOfParent` as separate real rows —
+   and the template's row order **flipped between the two years**. The
+   dedup was keeping whichever row came first, so FY2022 got parent-only
+   equity and failed the identity by exactly the ₩24.2B of NCI. Candidate
+   priority (total first) is now enforced explicitly in the dedup, with a
+   regression test covering both row orders.
+2. **Single-statement vs. two-statement IFRS presentation.** SK Hynix,
+   NAVER, Kakao, and Amorepacific present one combined statement of
+   comprehensive income: their *entire* income statement lives under
+   `sj_div='CIS'` with no `IS` section at all. The earlier Samsung-derived
+   fix had excluded CIS as "redundant" — true for Samsung's two-statement
+   format, fatal for single-statement filers, whose Revenue and
+   NetIncomeLoss silently vanished. CIS is now mapped (dual-statement
+   filers' duplicate rows collapse harmlessly in dedup); SCE remains
+   excluded.
+3. **Restated years are served from much later documents.** For FY2022,
+   DART returned Hyundai Motor's and Kakao's figures from documents
+   received in **March 2024** — the filing-date search window (originally
+   Jan–Jun of year+1) couldn't match them, and the rows were dropped. The
+   window is now +1..+2 years, with a guarded fallback: the first 8 digits
+   of `rcept_no` are the receipt date, an assumption explicitly **not**
+   relied on earlier but since confirmed empirically on four independent
+   real filings where both fields were visible side by side.
+
+Post-fix: **37/40 company-years pass the exact accounting identity**; the
+other three are the FY2022 financial institutions (KB, Shinhan, Samsung
+Life), for which DART itself returns status 013 "no data" — the endpoint's
+documented historical exclusion of financials, whose coverage begins
+FY2023. From FY2023 they return liquidity-order balance sheets with no
+current/non-current split, so O-Score excludes them automatically via
+missing tags — the same principled financial-institution exclusion as the
+US (missing classified-balance-sheet tags) and Brazil (COSIF label
+mismatch) pipelines, arrived at through a third distinct mechanism.
+
+O-Scores for all 18 non-financials, unmodified pipeline: Samsung
+Electronics safest (−14.85), then LG Corp (−13.94), Celltrion (−13.50),
+Hyundai Mobis (−13.44), Amorepacific (−13.27) … SK Hynix mid-pack (−11.14,
+consistent with its 2023 memory-downcycle loss year), Kakao low (−10.76,
+₩1.8T net loss in 2023), and KEPCO riskiest (−9.39, the famously
+debt-laden utility). The ordering required no tuning to look like this —
+it falls out of the 1980 coefficients on honestly-mapped data, which is
+about as good a sanity check as a bankruptcy score can get without a
+default sample.
 
 ## Bottom line
 
