@@ -150,12 +150,48 @@ two years after fiscal year end, so the filing-date search window is now
 +1..+2 years with a validated `rcept_no` date-prefix fallback (first 8
 digits = receipt date, empirically confirmed on four real filings).
 
-**Still incomplete**: DART's `fnlttSinglAcntAll` response — confirmed by
-direct inspection — carries no share-count field (it lives in a separate
-DART API family not called here), so Piotroski's dilution criterion and
-Altman Z's market-cap term won't compute for Korean names; Ohlson O-Score
-is the confirmed-working score. Filers outside these 21 may use tag
-spellings or statement layouts the sweep didn't encounter.
+### Shares outstanding: a second endpoint
+
+Share counts appear nowhere in `fnlttSinglAcntAll` (confirmed by direct
+inspection, not assumed) — they live in DART's separate
+**`stockTotqySttus`** API, which the adapter now also calls, mapping the
+common class's 유통주식수 (circulating shares, already net of treasury)
+onto the same canonical `CommonStockSharesOutstanding` tag the US path
+uses. Resolved for **all 42 company-years with zero unmatched filers**,
+and the values reproduce known real corporate actions:
+
+| Company | FY2022 → FY2023 | Real event |
+|---|---|---|
+| Celltrion | 137.8M → 207.2M | Dec-2023 Celltrion Healthcare merger |
+| SK Innovation | 84.2M → 95.2M | 2023 capital raise |
+| KB Financial | 389.6M → 378.7M | buyback-and-cancel |
+| Kia | 400.9M → 396.2M | share cancellation |
+
+Getting the share *class* right is load-bearing: `se` (the class label)
+has no single spelling across filers — `보통주`, `의결권 있는 보통주`,
+`의결권 있는\n보통주` (Shinhan, embedded newline), `의결권 있는 주식\n(보통주)`
+(LG Electronics) — so exact-match silently returned nothing for two of the
+21. A substring test catches all four while correctly excluding `우선주`
+(preferred), Amorepacific's `종류주` (class share), and the `합계` total row
+that *bundles* preferred: for Hyundai Motor that's 202.3M common vs 261.3M
+total, a 23% error in both dilution and market cap.
+
+**With shares mapped, all three scores now compute** — Piotroski **16/21**,
+Altman Z **18/21** (pairing DART shares with KRX prices via yfinance `.KS`
+tickers), Ohlson O **18/21**. Samsung's implied market cap of ₩469T matches
+its real common-only capitalisation, and Altman ranks KEPCO at **Z = 0.28**,
+squarely in the distress zone — correct for a utility carrying ~₩200T of
+debt after years of selling power below cost.
+
+**Remaining exclusions are structural, not mapping gaps**: NAVER and
+SK Telecom report no gross-profit or cost-of-sales line at all (service
+companies presenting a single `ifrs-full_OperatingExpense`), so Piotroski's
+Δ-gross-margin criterion drops them — exactly as it drops the many US
+service companies whose `GrossProfit` tag is likewise absent. Only the
+common share class is mapped, so companies with large preferred floats get
+a common-only market cap (the same limitation the US path already carries).
+Filers outside these 21 may use tag spellings, share-class labels, or
+statement layouts the sweep didn't encounter.
 
 ## Setup
 

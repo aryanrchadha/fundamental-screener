@@ -19,6 +19,7 @@ import pytest
 
 from pit_fundamentals.dart_kr_client import (
     _normalize_account_id,
+    _parse_dart_number,
     facts_from_dataframes,
     require_api_key,
 )
@@ -270,3 +271,121 @@ def test_long_term_debt_summed_from_bonds_and_loans(filings_df):
     facts = facts_from_dataframes("TEST", "00000001", "2023", fin, filings_df)
     debt = facts[facts["tag"] == "LongTermDebtNoncurrent"].sort_values("fiscal_period_end")
     assert list(debt["value"]) == [pytest.approx(508 + 2866), pytest.approx(536 + 3560), pytest.approx(537 + 3724)]
+
+
+# ---------------------------------------------------------------------------
+# Share counts (stockTotqySttus). Fixture labels below are the REAL `se`
+# spellings observed across the 21-name KOSPI sweep — see COMMON_STOCK_LABEL's
+# comment in dart_kr_client.py.
+# ---------------------------------------------------------------------------
+
+def _share_row(se, istc, tes, distb, rcept_no="20240101000001", stlm="2023-12-31"):
+    return dict(
+        rcept_no=rcept_no, corp_cls="Y", corp_code="00000001", corp_name="TESTCO",
+        se=se, isu_stock_totqy="20,000,000,000", now_to_isu_stock_totqy="-",
+        now_to_dcrs_stock_totqy="-", redc="-", profit_incnr="-", rdmstk_repy="-",
+        etc="-", istc_totqy=istc, tesstk_co=tes, distb_stock_co=distb, stlm_dt=stlm,
+    )
+
+
+def _shares_only(shares_df, filings_df, bsns_year="2023"):
+    """Run the transform with no financial-statement rows at all."""
+    return facts_from_dataframes(
+        "TEST", "00000001", bsns_year, pd.DataFrame(), filings_df, shares=shares_df
+    )
+
+
+def test_parse_dart_number_handles_commas_and_dashes():
+    assert _parse_dart_number("5,969,782,550") == 5_969_782_550.0
+    assert _parse_dart_number("-") is None      # absent, NOT zero
+    assert _parse_dart_number("") is None
+    assert _parse_dart_number(None) is None
+    assert _parse_dart_number("주9)") is None   # a 비고 footnote marker
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "보통주",                    # Samsung, Celltrion, most filers
+        "의결권 있는 보통주",          # voting common
+        "의결권 있는\n보통주",         # Shinhan — embedded newline
+        "의결권 있는 주식\n(보통주)",   # LG Electronics — parenthesised
+    ],
+)
+def test_all_real_common_stock_label_variants_map(label, filings_df):
+    """Every `se` spelling for common stock seen in the live 21-name sweep
+    must resolve. Exact-equality matching (the first implementation) silently
+    produced NO share count for Shinhan and LG Electronics."""
+    shares = pd.DataFrame(
+        [
+            _share_row(label, "163,647,814", "763,176", "162,884,638"),
+            _share_row("합계", "180,833,806", "767,869", "180,065,937"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    got = facts[facts["tag"] == "CommonStockSharesOutstanding"]
+    assert len(got) == 1
+    assert got["value"].iloc[0] == 162_884_638.0   # common, already net of treasury
+    assert got["unit"].iloc[0] == "shares"
+
+
+def test_preferred_and_class_shares_never_mapped(filings_df):
+    """'우선주' (preferred) and Amorepacific's '종류주' (class share) must not
+    be mistaken for common — and the 합계 total (which BUNDLES preferred) must
+    not win either: Hyundai Motor's real common 202.3M vs total 261.3M is a
+    23% difference that would badly distort dilution and market cap."""
+    shares = pd.DataFrame(
+        [
+            _share_row("보통주", "203,830,910", "-", "202,259,505"),
+            _share_row("의결권 없는 우선주", "59,048,998", "-", "59,048,998"),
+            _share_row("종류주", "10,557,830", "6,217", "10,551,613"),
+            _share_row("합계", "262,879,908", "-", "261,308,503"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    got = facts[facts["tag"] == "CommonStockSharesOutstanding"]
+    assert len(got) == 1
+    assert got["value"].iloc[0] == 202_259_505.0
+
+
+def test_share_count_is_instant_fact_dated_from_stlm_dt(filings_df):
+    """A share count is a point-in-time balance, not a flow: no start_date,
+    and its fiscal_period_end comes from the response's own stlm_dt."""
+    shares = pd.DataFrame([_share_row("보통주", "100", "0", "100", stlm="2023-12-31")])
+    facts = _shares_only(shares, filings_df)
+    row = facts[facts["tag"] == "CommonStockSharesOutstanding"].iloc[0]
+    assert row["start_date"] is None
+    assert row["fiscal_period_end"] == date(2023, 12, 31)
+    assert row["filed_date"] == date(2024, 3, 15)   # gated like every other fact
+
+
+def test_missing_common_share_count_excluded_not_zeroed(filings_df, caplog):
+    """A '-' outstanding count means 'not reported', never 'zero shares'."""
+    shares = pd.DataFrame([_share_row("보통주", "-", "-", "-")])
+    with caplog.at_level("WARNING"):
+        facts = _shares_only(shares, filings_df)
+    assert facts.empty
+    assert any("distb_stock_co" in r.message for r in caplog.records)
+
+
+def test_no_common_class_at_all_warns_and_excludes(filings_df, caplog):
+    shares = pd.DataFrame(
+        [_share_row("우선주", "100", "0", "100"), _share_row("비고", "-", "-", "-")]
+    )
+    with caplog.at_level("WARNING"):
+        facts = _shares_only(shares, filings_df)
+    assert facts.empty
+    assert any("no share class matching" in r.message for r in caplog.records)
+
+
+def test_shares_merge_with_financial_statement_facts(filings_df, fin_df):
+    """Share facts and statement facts land in one frame under the shared
+    schema — the whole point of routing a second endpoint through the same
+    canonical-tag contract."""
+    shares = pd.DataFrame([_share_row("보통주", "100", "0", "100")])
+    facts = facts_from_dataframes("TEST", "00000001", "2023", fin_df, filings_df, shares=shares)
+    tags = set(facts["tag"])
+    assert {"Assets", "Revenues", "CommonStockSharesOutstanding"} <= tags
+    assert facts["taxonomy"].eq("dart-kr").all()

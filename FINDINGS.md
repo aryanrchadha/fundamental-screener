@@ -278,10 +278,8 @@ and Ohlson O-Score computes end-to-end through the **unmodified**
 distress-free territory for one of the world's largest, most stable
 companies. DART's financial-statement endpoint — confirmed by direct
 inspection, not assumed — carries no share-count field anywhere in its
-response (that data lives in a separate DART API family this adapter
-doesn't call), so Piotroski's dilution criterion and Altman Z's market-cap
-term remain uncomputable for Korean names; Ohlson O-Score is the one
-score confirmed working.
+response; that data lives in a separate DART API family, since mapped
+(see "Shares outstanding" below).
 
 The meta-finding worth keeping: **the pre-key version's stated
 low-confidence flags were directionally correct** (it explicitly called
@@ -347,6 +345,62 @@ debt-laden utility). The ordering required no tuning to look like this —
 it falls out of the 1980 coefficients on honestly-mapped data, which is
 about as good a sanity check as a bankruptcy score can get without a
 default sample.
+
+### Shares outstanding: the second endpoint, and why the class label mattered
+
+The one remaining gap — share counts, needed for Piotroski's dilution
+criterion and Altman Z's market-cap term — was closed by wiring DART's
+separate `stockTotqySttus` ("주식의 총수 현황") API, since share counts
+appear nowhere in the financial-statement response. Two things are worth
+recording.
+
+**First, the data validated itself.** DART reports issued, treasury, and
+circulating counts per share class; the identity *issued − treasury =
+circulating* holds on **every row of all 42 company-years**, so the
+circulating figure is internally consistent rather than trusted blind.
+The mapped values then reproduce known real corporate actions without any
+tuning: Celltrion 137.8M → 207.2M across its December-2023 Healthcare
+merger, SK Innovation 84.2M → 95.2M from its 2023 capital raise, KB
+Financial 389.6M → 378.7M and Kia 400.9M → 396.2M from buyback-and-cancel
+programmes. A share series that independently rediscovers the year's
+actual equity events is about as strong a correctness signal as this kind
+of mapping admits.
+
+**Second, share-class selection was the real trap** — and a
+single-company check would have sailed past it. The class label `se` has
+no consistent spelling: `보통주` for most filers, but `의결권 있는\n보통주`
+for Shinhan (with an embedded newline) and `의결권 있는 주식\n(보통주)` for
+LG Electronics. Exact-match returned *nothing* for those two. Worse, the
+obvious fallback — the `합계` (total) row — is wrong, because it bundles
+preferred stock: for Hyundai Motor that is 202.3M common against 261.3M
+total, so taking the total would overstate market cap and corrupt the
+dilution check by 23%. A substring test on `보통주` resolves all four
+observed spellings while excluding `우선주` (preferred) and Amorepacific's
+`종류주` (a separate class share). Only the common class is mapped, which
+deliberately mirrors the US path's own convention of pairing common
+shares with the common ticker's price — a shared limitation applied
+consistently, not a Korea-specific defect.
+
+With shares mapped, **all three scores compute for Korea**: Piotroski
+16/21, Altman Z 18/21, Ohlson O 18/21. Altman required only KRX prices
+(yfinance `.KS` tickers) on top of the DART shares; Samsung's implied
+market cap of ₩469T matches its real common-only capitalisation, and the
+Z ranking puts KEPCO at **0.28**, deep in the distress zone — the correct
+read for a utility carrying roughly ₩200T of debt after years of selling
+electricity below cost, and a pleasing cross-check that Piotroski's
+independent verdict on the same firm (F = 7, i.e. *improving*) is not
+contradictory but complementary: KEPCO is a highly distressed balance
+sheet that was getting better year-over-year.
+
+The remaining exclusions are structural rather than mapping gaps, and
+worth stating so they are not mistaken for bugs: NAVER and SK Telecom
+report no gross-profit or cost-of-sales line whatsoever — service
+companies presenting a single `ifrs-full_OperatingExpense` — so
+Piotroski's Δ-gross-margin criterion excludes them, exactly as it excludes
+the many US service companies whose `GrossProfit` tag is likewise absent
+(directly tagged for only ~42% of US company-years). Deriving a
+gross-profit proxy from operating expense would be fabrication, so the
+company-year is dropped and logged instead.
 
 ## Bottom line
 

@@ -33,10 +33,13 @@ March-2024 documents), outside the original filing-search window — the
 window is now +1..+2 years with a validated rcept_no date-prefix fallback
 (first 8 digits = receipt date, empirically confirmed on four filings).
 
-STILL NOT COVERED: shares outstanding (absent from this endpoint entirely
-— see the "NOT MAPPED" section below), so Piotroski and Altman Z remain
-uncomputable for Korean names; and filers outside these 21 may use tag
-spellings or statement layouts this sweep didn't encounter.
+Shares outstanding — absent from the financial-statement endpoint — are
+now sourced from DART's separate `stockTotqySttus` API; see the SHARES
+OUTSTANDING section below. With them mapped, all three scores compute:
+Piotroski 16/21, Altman Z 18/21 (given KRX prices), Ohlson O 18/21.
+
+STILL NOT COVERED: filers outside these 21 may use tag spellings, share-
+class labels, or statement layouts this sweep didn't encounter.
 
 WHY SOUTH KOREA, AS THE NEXT "LEADING EM" AFTER BRAZIL: DART (Data Analysis,
 Retrieval and Transfer System), run by Korea's Financial Supervisory
@@ -63,21 +66,40 @@ _normalize_account_id before comparison), tried in order — the same
 tag-naming inconsistency (e.g. Revenues vs. SalesRevenueNet), just extended
 to also strip taxonomy namespace prefixes.
 
-WHAT IS DELIBERATELY NOT MAPPED (left as NaN rather than guessed): shares
-outstanding. Confirmed by inspecting Samsung's real fnlttSinglAcntAll
-response directly: no share-count field appears anywhere in it — this data
-genuinely lives in a separate DART API family (share/equity-composition
-endpoints, not called here), not just an unmapped tag within this
-response. Guessing a plausible-looking but wrong tag name is worse than
-leaving the field empty — a wrong tag can silently match real (wrong)
-data; an absent tag just means that score is excluded and logged,
-consistent with this project's "never fabricate" rule. Piotroski's
-share-dilution criterion and Altman Z's market-cap term are therefore NOT
-computable for DART-sourced companies until someone extends this module
-with a verified shares-outstanding source. Ohlson O-Score needs neither
-and IS confirmed working (Assets, Liabilities, AssetsCurrent,
-LiabilitiesCurrent, NetIncomeLoss for two years, and operating cash flow —
-all live-verified above).
+SHARES OUTSTANDING comes from a SECOND endpoint. Confirmed by inspecting
+real fnlttSinglAcntAll responses directly: no share-count field appears
+anywhere in them — share data genuinely lives in a different DART API
+family. `stockTotqySttus` ("주식의 총수 현황") supplies it, and
+get_share_counts() + the share block in facts_from_dataframes() map its
+common-stock 유통주식수 (circulating shares) onto the same canonical
+`CommonStockSharesOutstanding` tag the US-GAAP path uses. Live-verified
+across all 42 company-years of the 21-name sweep with zero unmatched
+filers; values reproduce known real corporate actions (Celltrion
+137.8M → 207.2M across its Dec-2023 Healthcare merger; KB 389.6M → 378.7M
+and Kia 400.9M → 396.2M from buyback-and-cancel programmes; SK Innovation
+84.2M → 95.2M from its 2023 capital raise). With shares mapped, Piotroski
+(16/21) and — once KRX prices are supplied, e.g. yfinance's `.KS` tickers
+— Altman Z (18/21) both compute; Samsung's implied market cap of ₩469T
+matches its real common-only capitalisation.
+
+CAVEAT ON WHICH SHARE CLASS: only the COMMON class is mapped, matching the
+canonical tag's own semantics (`CommonStockSharesOutstanding`) and the
+US path's convention of pairing common shares with the common ticker's
+price. Korean filers with large preferred floats therefore get a market
+cap that excludes preferred — for Hyundai Motor that is 202.3M common vs
+261.3M total shares, a 23% difference. This is the same limitation the
+US-GAAP path already carries, applied consistently, not a Korea-specific
+defect.
+
+STILL NOT COMPUTABLE for some filers, for honest structural reasons
+rather than mapping gaps: NAVER and SK Telecom report no gross-profit or
+cost-of-sales line at all (service companies presenting a single
+`ifrs-full_OperatingExpense`), so Piotroski's Δ-gross-margin criterion
+excludes them — exactly as it excludes the many US service companies
+whose GrossProfit tag is likewise absent. The three financial
+institutions file liquidity-order balance sheets with no
+current/non-current split, so every working-capital-dependent score
+excludes them automatically.
 """
 
 from __future__ import annotations
@@ -98,9 +120,39 @@ BASE_URL = "https://opendart.fss.or.kr/api"
 CORP_CODE_URL = f"{BASE_URL}/corpCode.xml"
 FILING_LIST_URL = f"{BASE_URL}/list.json"
 FINANCIALS_URL = f"{BASE_URL}/fnlttSinglAcntAll.json"
+# 주식의 총수 현황 ("status of total number of shares") — a DIFFERENT API
+# family from the financial statements. Share counts appear nowhere in
+# fnlttSinglAcntAll's response; this endpoint is where they actually live.
+SHARES_URL = f"{BASE_URL}/stockTotqySttus.json"
 
 ANNUAL_REPRT_CODE = "11011"  # 사업보고서 (Annual/Business Report) — confirmed enum value
 FS_DIV_PRIORITY = ["CFS", "OFS"]  # Consolidated preferred, Individual/standalone fallback
+
+# --- Share-count mapping (stockTotqySttus) --------------------------------
+# The response is one row per share class plus a 합계 (total) and 비고
+# (remarks) row. Columns of interest, all comma-formatted strings with "-"
+# for missing: istc_totqy (발행주식의 총수, issued), tesstk_co (자기주식수,
+# treasury), distb_stock_co (유통주식수, = issued − treasury).
+#
+# distb_stock_co IS shares outstanding — already net of treasury. Verified
+# arithmetically on ALL 42 company-years of the 21-name KOSPI sweep:
+# istc_totqy − tesstk_co == distb_stock_co on every single row, so the
+# field is internally consistent rather than taken on faith.
+#
+# ROW SELECTION is the subtle part. `se` (구분) labels the share class, and
+# real filings do NOT use one consistent spelling for common stock. Every
+# variant observed across the sweep:
+#     '보통주'                     (Samsung, Celltrion, most filers)
+#     '의결권 있는 보통주'          (voting common)
+#     '의결권 있는\n보통주'         (Shinhan — embedded newline)
+#     '의결권 있는 주식\n(보통주)'   (LG Electronics — parenthesised)
+# A substring test for '보통주' catches all four. It correctly does NOT
+# match the preferred-class labels ('우선주', '의결권 없는 우선주',
+# '의결권 없는 주식\n(우선주)') — '보통주' and '우선주' share only their
+# final character — nor Amorepacific's '종류주' (a separate class share).
+COMMON_STOCK_LABEL = "보통주"
+SHARES_TOTAL_LABEL = "합계"
+SHARES_REMARKS_LABEL = "비고"
 
 # canonical tag -> candidate account_id spellings, prefix-stripped and
 # lowercased before comparison (see _normalize_account_id).
@@ -300,6 +352,51 @@ def search_annual_filings(
     return df[["corp_code", "rcept_no", "rcept_dt", "report_nm"]].sort_values("rcept_dt")
 
 
+def get_share_counts(
+    api_key: str, corp_code: str, bsns_year: str,
+    cache_path: str = "data/http_cache", cache_ttl: int = 30 * 86400,
+) -> pd.DataFrame:
+    """One company-year's share-class table from stockTotqySttus.
+
+    Unlike fnlttSinglAcntAll (which reports three fiscal years per call),
+    this endpoint returns only the single period identified by `stlm_dt`,
+    so prior-year share counts require their own call with the earlier
+    bsns_year — which run_dart_ingest already does by looping over --years.
+    """
+    session = _session(cache_path, cache_ttl)
+    resp = session.get(
+        SHARES_URL,
+        params={
+            "crtfc_key": api_key, "corp_code": corp_code,
+            "bsns_year": bsns_year, "reprt_code": ANNUAL_REPRT_CODE,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("status") != "000":
+        log.info("DART stockTotqySttus %s/%s: no data (status=%s)",
+                 corp_code, bsns_year, payload.get("status"))
+        return pd.DataFrame()
+    return pd.DataFrame(payload.get("list", []))
+
+
+def _parse_dart_number(raw) -> float | None:
+    """DART formats counts with thousands separators and uses '-' for
+    absent values. Returns None for anything non-numeric rather than
+    coercing to 0 — an absent share count must exclude the company-year,
+    never silently read as zero shares."""
+    if raw is None:
+        return None
+    s = str(raw).replace(",", "").strip()
+    if s in ("", "-"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def get_financial_statement(
     api_key: str, corp_code: str, bsns_year: str,
     cache_path: str = "data/http_cache", cache_ttl: int = 30 * 86400,
@@ -339,7 +436,8 @@ def extract_company_facts(
     around facts_from_dataframes (kept separate so the mapping/gating logic
     is testable without hitting the live API)."""
     fin = get_financial_statement(api_key, corp_code, bsns_year, cache_path=cache_path)
-    if fin.empty:
+    shares = get_share_counts(api_key, corp_code, bsns_year, cache_path=cache_path)
+    if fin.empty and shares.empty:
         return pd.DataFrame()
 
     # Filing-index window: FY-end + 1 year THROUGH FY-end + 2 years.
@@ -355,23 +453,25 @@ def extract_company_facts(
     filings = search_annual_filings(api_key, corp_code, year_start, year_end, cache_path=cache_path)
     # An empty index is no longer fatal: facts_from_dataframes can fall
     # back to the rcept_no date prefix (see _filed_date_for's comment).
-    return facts_from_dataframes(ticker, corp_code, bsns_year, fin, filings)
+    return facts_from_dataframes(ticker, corp_code, bsns_year, fin, filings, shares=shares)
 
 
 def facts_from_dataframes(
-    ticker: str, corp_code: str, bsns_year: str, fin: pd.DataFrame, filings: pd.DataFrame
+    ticker: str, corp_code: str, bsns_year: str, fin: pd.DataFrame,
+    filings: pd.DataFrame, shares: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Pure transformation: account_id mapping + rcept_dt gating, given
-    already-fetched fnlttSinglAcntAll (`fin`) and list.json (`filings`)
-    DataFrames. Split out from extract_company_facts so tests can exercise
-    the real mapping/gating logic with synthetic DataFrames — no network,
-    no API key required."""
-    # Only BS/IS/CF rows are ever mapped — see MAPPABLE_STATEMENT_TYPES'
-    # comment for why SCE (and, harmlessly but redundantly, CIS) are
-    # excluded: SCE in particular tags multiple genuinely-different values
-    # (total equity, per-component balances, NCI- vs parent-attributable
-    # net income) under the SAME account_id, which a naive per-row loop
-    # would otherwise insert as silently conflicting facts.
+    already-fetched fnlttSinglAcntAll (`fin`), list.json (`filings`) and
+    optionally stockTotqySttus (`shares`) DataFrames. Split out from
+    extract_company_facts so tests can exercise the real mapping/gating
+    logic with synthetic DataFrames — no network, no API key required."""
+    if fin is None or fin.empty:
+        fin = pd.DataFrame(columns=["sj_div", "account_id", "rcept_no"])
+    # Only BS/IS/CIS/CF rows are ever mapped — see MAPPABLE_STATEMENT_TYPES'
+    # comment for why SCE is excluded: it tags multiple genuinely-different
+    # values (total equity, per-component balances, NCI- vs parent-
+    # attributable net income) under the SAME account_id, which a naive
+    # per-row loop would otherwise insert as silently conflicting facts.
     fin = fin[fin["sj_div"].isin(MAPPABLE_STATEMENT_TYPES)]
 
     def _filed_date_for(rcept_no):
@@ -474,6 +574,58 @@ def facts_from_dataframes(
         row = _make_row(canon, fiscal_period_end, total, sum_filed_dates[key], sum_is_flow[canon])
         row["_priority"] = 0  # summed tags have no competing candidates
         rows.append(row)
+
+    # Share counts (stockTotqySttus). A share count is an INSTANT fact, like
+    # a balance-sheet line, so start_date stays None and query.py's
+    # instant-tag filter accepts it on the shared 'DART-ANNUAL' form marker.
+    if shares is not None and not shares.empty:
+        common = shares[
+            shares["se"].astype(str).str.contains(COMMON_STOCK_LABEL, na=False)
+        ]
+        if common.empty:
+            log.warning(
+                "%s FY%s: no share class matching %r in stockTotqySttus "
+                "(labels present: %s) — shares outstanding excluded",
+                ticker, bsns_year, COMMON_STOCK_LABEL,
+                sorted({str(s).replace(chr(10), " ") for s in shares["se"]}),
+            )
+        else:
+            if len(common) > 1:
+                # Never observed in the verified 21-name sweep. If a filer
+                # ever reports multiple common classes, take the largest
+                # (the primary listed class, matching the exchange ticker's
+                # price) and say so loudly rather than picking silently.
+                log.warning(
+                    "%s FY%s: %d share classes match %r (%s) — using the "
+                    "largest; re-verify this filer's mapping",
+                    ticker, bsns_year, len(common), COMMON_STOCK_LABEL,
+                    [str(s).replace(chr(10), " ") for s in common["se"]],
+                )
+            best, best_val = None, None
+            for _, r in common.iterrows():
+                v = _parse_dart_number(r.get("distb_stock_co"))
+                if v is not None and (best_val is None or v > best_val):
+                    best, best_val = r, v
+            if best is None:
+                log.warning("%s FY%s: common share row has no parseable "
+                            "distb_stock_co — shares outstanding excluded", ticker, bsns_year)
+            else:
+                filed_date = _filed_date_for(best["rcept_no"])
+                fiscal_period_end = None
+                stlm = str(best.get("stlm_dt", "")).strip()
+                if stlm:
+                    try:
+                        fiscal_period_end = pd.Timestamp(stlm).date()
+                    except ValueError:
+                        fiscal_period_end = None
+                if fiscal_period_end is None:
+                    fiscal_period_end = date(int(bsns_year), 12, 31)
+                if filed_date is not None:
+                    row = _make_row("CommonStockSharesOutstanding", fiscal_period_end,
+                                    best_val, filed_date, is_flow=False)
+                    row["unit"] = "shares"
+                    row["_priority"] = 0
+                    rows.append(row)
 
     if not rows:
         return pd.DataFrame()
