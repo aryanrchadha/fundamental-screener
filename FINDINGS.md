@@ -473,6 +473,101 @@ their t-stats and Sharpes, which are unit-free, are.
    grouping the US path uses, so cross-market comparison of the
    *sector-neutral* step is approximate.
 
+## Survivorship correction, run for both backtestable universes
+
+Both markets were re-run with each rebalance restricted to names actually
+listed then (`--survivorship`, writing to separate `*_pit` outputs so the
+two runs can be compared rather than one overwriting the other).
+
+**S&P 500.** Wikipedia's constituent-changes table, unwound backwards,
+shrinks the January-2012 cross-section from 503 names to 294. Annualised
+D10−D1 by strategy, static vs corrected: F-Score −1.7% → −1.3%, Z-Score
+−4.1% → −5.4%, O-Score −6.0% → −4.2%, composite −0.7% → −1.3%. The
+correction moves individual scores in *both* directions — it is not a
+uniform haircut — and changes no conclusion: nothing survives Deflated
+Sharpe either way.
+
+**KOSPI.** First-annual-filing dates were pulled per company from DART's
+own index; 13 of the 120 names were not yet KOSPI filers in 2016 (Samsung
+Biologics, Woori Financial, the HD Hyundai spin-offs, Netmarble). The
+corrected run is **bit-for-bit identical to the static one** — same 105
+months, same spread series, same statistics to three decimals.
+
+That identity is the most useful thing in this section. Of the 362
+company-months the listing gate removed, **zero** had a computable score:
+a company that has not filed an annual report has no facts in the PIT
+snapshot, so it scores NaN and never reaches bucket formation. The
+filing-date gate had already made look-ahead structurally impossible, and
+the listing gate is belt-and-braces confirming it. This is independent
+evidence that the point-in-time database does what it claims, obtained by
+trying to break it rather than by asserting it.
+
+**What neither correction fixes.** Both handle look-ahead. Neither fully
+handles delisting survivorship, and the Korean limit is worth recording
+because the obvious approach fails silently:
+
+- DART's `corp_cls` is a **current** attribute, not a historical one.
+  Querying the filing index with `corp_cls='Y'` returns 684 KOSPI filers
+  for 2016 and reports *zero* of them missing by 2025 — an impossible
+  delisting rate over a decade, and purely an artefact of the filter
+  excluding anything since reclassified. Dropping the filter shows 2,097
+  companies filed annual reports in that window, of which 406 now carry
+  class 'E'. A membership table built the naive way would have been
+  survivorship-biased *and* looked authoritative.
+- Those names cannot be priced regardless: Yahoo returned usable `.KS`
+  history for only **4 of a 40-name sample** of them, because it drops
+  delisted KRX tickers.
+
+So the residual bias is quantified rather than papered over, and the
+reported levels remain optimistic in both markets.
+
+## India: a fourth market, and a weaker guarantee
+
+`pit_fundamentals/india_client.py` covers the top 100 Indian companies by
+market cap. It is deliberately built differently from the other three, and
+the reason is a finding in itself about what "free fundamentals data"
+means outside the US.
+
+Every other regulator here publishes machine-readable statements with a
+filing date attached to each number. India does not. What exists, verified
+by direct request:
+
+- **BSE's public API** serves audited-results announcements carrying a real
+  dissemination timestamp (Reliance's FY2024: 2024-04-22T19:00:20) — an
+  authoritative filing date. But the values are in an attached PDF; the
+  XBRL URL patterns all 404 and the structured-results endpoints return
+  BSE's generic HTML error page.
+- **Yahoo Finance** serves the values for `.NS` tickers, and unusually
+  completely — every canonical tag, including a direct `EBIT` and share
+  count. But no filing date whatsoever.
+
+Neither source can support point-in-time gating alone; joined, they can.
+Values come from Yahoo keyed to fiscal period end, gated by the BSE
+dissemination date of the announcement that first reported that period,
+refused entirely if no announcement falls in a plausible window.
+
+**Verification**: 387/387 company-years satisfy Assets = Liabilities +
+Equity to within 0.1% (after correcting the equity mapping to the
+including-NCI row — the parent-only row leaves a hole exactly the size of
+minority interest, ₹181,836 crore on Reliance FY2026). Filing lags run
+9–134 days, median 40, consistent with SEBI's 60-day deadline. Scores
+through the unmodified pipeline put **Vodafone Idea at a *negative* Altman
+Z of −1.64 and the highest Ohlson O in the universe** — two independent
+distress models agreeing, with no tuning, on India's most famously
+distressed large-cap. The leveraged utilities and infra names (IRFC,
+POWERGRID, NTPC, Tata Power, Adani Green) cluster immediately above it.
+
+**The honest weakness.** Yahoo serves one *current* value per fiscal
+period. A figure revised later appears as though it always read that way,
+so `is_restatement` is always False and the load-bearing restatement test
+that anchors the EDGAR, CVM and DART paths has no Indian equivalent — the
+source physically cannot express one. Look-ahead is prevented;
+restatement-blindness is not. Yahoo also supplies only ~5 annual periods,
+leaving ~4 scoreable years after the year-on-year deltas, which is enough
+for a screener and too short for the Newey-West/DSR machinery. India is
+therefore deliberately **not** registered as a backtest universe, rather
+than being given a backtest its data cannot support.
+
 ## Bottom line
 
 As a *screener* the artifact works and the infrastructure (the PIT database
@@ -491,3 +586,14 @@ that returned nearly as much as the top. Two markets failing the same way
 is meaningfully stronger evidence than one, and the honest summary is that
 these scores are a defensible *screen* and a genuinely reusable piece of
 infrastructure, but not, on this evidence, a strategy.
+
+Correcting for survivorship does not rescue it. Re-running both universes
+with each rebalance restricted to names actually listed at the time leaves
+the US conclusion unchanged (individual scores move in both directions,
+none survives) and leaves the Korean result numerically identical, because
+the filing-date gate had already made look-ahead impossible. Adding India
+as a fourth market extends the screen but not the evidence base — its data
+supports ~4 scoreable years, so it gets a screener and explicitly not a
+backtest. Across everything actually testable here, the count stands at
+**eight strategy-market pairs, four survivorship-corrected re-runs, and
+zero survivors.**

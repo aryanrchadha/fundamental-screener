@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description="Ingest fundamentals facts into the PIT DB")
     p.add_argument("--universe", default="sp500", choices=["sp500"])
     p.add_argument(
-        "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br", "dart-kr"],
+        "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br", "dart-kr", "bse-in"],
         help=(
             "us-gaap: SEC EDGAR XBRL (default). cvm-br: Brazil/B3 blue chips via "
             "CVM Dados Abertos. dart-kr: South Korea/KOSPI via DART OpenAPI "
@@ -196,6 +196,13 @@ def main(argv: list[str] | None = None) -> None:
         from screener.universe_br import get_br_blue_chips
 
         run_cvm_ingest(get_br_blue_chips(), years=args.years, db_path=args.db)
+        return
+
+    if args.taxonomy == "bse-in":
+        from pit_fundamentals.india_client import run_india_ingest
+        from screener.universe_in import get_in_universe
+
+        run_india_ingest(get_in_universe(), db_path=args.db)
         return
 
     if args.taxonomy == "dart-kr":

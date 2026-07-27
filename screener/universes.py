@@ -28,12 +28,17 @@ Adding a third market means adding a Universe, not editing the backtest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pandas as pd
 
 import config
+
+
+def _suffixed(path: Path, suffix: str) -> Path:
+    """data/x.parquet + '_pit' -> data/x_pit.parquet"""
+    return path.with_name(f"{path.stem}{suffix}{path.suffix}")
 
 
 @dataclass(frozen=True)
@@ -51,6 +56,9 @@ class Universe:
     rolling_path: Path
     start: str
     end: str
+    # When True, each rebalance is restricted to names that were actually
+    # listed/constituents on that date (survivorship-bias-corrected mode).
+    survivorship_corrected: bool = False
     # Populated lazily so importing this module never triggers a network call.
     _tickers: tuple[str, ...] | None = field(default=None)
 
@@ -63,6 +71,25 @@ class Universe:
     def membership(self) -> pd.DataFrame | None:
         """Point-in-time constituent history, or None to use a static list."""
         return None
+
+    def corrected(self) -> "Universe":
+        """A survivorship-corrected twin writing to its own `_pit` outputs.
+
+        Separate paths matter: the point of the correction is to compare the
+        two runs side by side, which is impossible if the second overwrites
+        the first. The PIT database and price cache are deliberately SHARED
+        — the same facts and prices feed both runs, and only the per-date
+        universe filter differs.
+        """
+        return replace(
+            self,
+            survivorship_corrected=True,
+            panel_path=_suffixed(self.panel_path, "_pit"),
+            bucket_returns_path=_suffixed(self.bucket_returns_path, "_pit"),
+            coefs_path=_suffixed(self.coefs_path, "_pit"),
+            validation_path=_suffixed(self.validation_path, "_pit"),
+            rolling_path=_suffixed(self.rolling_path, "_pit"),
+        )
 
     @property
     def top_bucket(self) -> str:
@@ -86,9 +113,12 @@ class SP500Universe(Universe):
         return get_sectors(self.tickers())
 
     def membership(self) -> pd.DataFrame | None:
+        """Wikipedia's 'selected changes' table, unwound backwards from
+        today's list. Only consulted in survivorship-corrected mode (or if
+        config.USE_PIT_UNIVERSE is set globally, kept for back-compat)."""
         from screener.universe import build_membership, get_sp500_constituents
 
-        if not config.USE_PIT_UNIVERSE:
+        if not (self.survivorship_corrected or config.USE_PIT_UNIVERSE):
             return None
         return build_membership(get_sp500_constituents())
 
@@ -104,6 +134,16 @@ class KospiUniverse(Universe):
         from screener.universe_kr import get_kr_sectors
 
         return pd.Series(get_kr_sectors())
+
+    def membership(self) -> pd.DataFrame | None:
+        """First-KOSPI-annual-filing dates per company. Corrects look-ahead
+        (13 of the 120 listed after 2016); delisting survivorship is NOT
+        correctable with free data — see build_kr_membership's docstring."""
+        from screener.universe_kr import build_kr_membership
+
+        if not self.survivorship_corrected:
+            return None
+        return build_kr_membership()
 
 
 SP500 = SP500Universe(

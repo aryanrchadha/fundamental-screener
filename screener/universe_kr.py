@@ -89,3 +89,47 @@ def is_financial(ticker: str) -> bool:
     if ticker not in row.index:
         return False
     return str(row.loc[ticker, "sector"]).removeprefix("KSIC-") in FINANCIAL_KSIC_DIVISIONS
+
+
+LISTING_DATES_CSV = Path(__file__).resolve().parent / "kospi_listing_dates.csv"
+
+
+@functools.lru_cache(maxsize=1)
+def build_kr_membership() -> pd.DataFrame:
+    """Point-in-time listing history, in the [ticker, start, end] shape
+    `screener.universe.was_member` expects.
+
+    `start` is the date of each company's FIRST KOSPI annual report (pulled
+    per-company from DART's own filing index). Thirteen of the 120 names
+    were not yet KOSPI filers in 2016 — Samsung Biologics, Woori Financial
+    Group, the HD Hyundai spin-offs, Netmarble and others — so a static
+    universe silently assumes they existed years before they did.
+
+    `end` is NaT for every name: all 120 are still filing, by construction
+    of how the universe was selected.
+
+    *** THIS CORRECTS LOOK-AHEAD, NOT DELISTING SURVIVORSHIP. *** The
+    distinction is load-bearing and was established empirically, not
+    assumed:
+
+      * DART's `corp_cls` is a CURRENT attribute, not a historical one.
+        Querying the filing index with corp_cls='Y' returns 684 KOSPI
+        filers for 2016 and reports ZERO of them missing by 2025 — an
+        impossible delisting rate that is purely an artefact of the filter
+        excluding anything since reclassified. Dropping the filter shows
+        2,097 companies filed annual reports in that window, of which 406
+        now carry class 'E'.
+      * Those reclassified names cannot be priced anyway: Yahoo returned
+        usable `.KS` history for only 4 of a 40-name sample (10%), because
+        it drops delisted KRX tickers.
+
+    So the surviving bias is stated and quantified in FINDINGS.md rather
+    than silently corrected with data that does not exist.
+    """
+    df = pd.read_csv(LISTING_DATES_CSV, dtype={"ticker": str})
+    df["ticker"] = df["ticker"].str.zfill(6)
+    return pd.DataFrame({
+        "ticker": df["ticker"],
+        "start": pd.to_datetime(df["first_annual_filing"]),
+        "end": pd.NaT,
+    })

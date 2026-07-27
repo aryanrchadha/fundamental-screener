@@ -205,9 +205,15 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Run the bucket backtest for one universe")
     p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--survivorship", action="store_true",
+                   help="restrict each rebalance to names actually listed then; "
+                        "writes to *_pit outputs so both runs can be compared")
     args = p.parse_args()
 
-    out = run_pipeline(args.universe)
+    uni = get_universe(args.universe)
+    if args.survivorship:
+        uni = uni.corrected()
+    out = run_pipeline(uni)
     uni = out["universe"]
     dec = out["decile_returns"].dropna(subset=["spread"])
     full = (1 + dec["spread"]).prod() - 1
@@ -215,10 +221,14 @@ def main() -> None:
     first = (1 + dec["spread"].iloc[:half]).prod() - 1
     second = (1 + dec["spread"].iloc[half:]).prod() - 1
     label = f"D{uni.n_buckets} - D1"
-    print(f"\n=== {uni.name} bucket backtest ({label}, equal weight, monthly, {uni.currency}) ===")
+    mode = "survivorship-corrected" if uni.survivorship_corrected else "static universe"
+    print(f"\n=== {uni.name} bucket backtest ({label}, equal weight, monthly, "
+          f"{uni.currency}, {mode}) ===")
     print(f"Months: {len(dec)}   Full-period cumulative spread: {full:+.1%}")
     print(f"First half: {first:+.1%}   Second half: {second:+.1%}")
-    print(f"Run `python -m screener.validation --universe {uni.name}` for Newey-West / DSR statistics.")
+    flag = " --survivorship" if uni.survivorship_corrected else ""
+    print(f"Run `python -m screener.validation --universe {uni.name}{flag}` "
+          f"for Newey-West / DSR statistics.")
 
 
 if __name__ == "__main__":

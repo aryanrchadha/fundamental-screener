@@ -37,6 +37,24 @@ FLOW_TAGS = {
 }
 MIN_ANNUAL_DAYS = 300  # a fiscal year is ~365d; 300 excludes quarterly/semiannual frames
 
+# Forms whose INSTANT (balance-sheet, share-count) facts are fiscal-YEAR-END
+# values. Flow facts prove their own annual-ness from their duration, but an
+# instant fact carries no duration, so the form is the only signal that it
+# is a year-end rather than a quarter-end balance — and mixing the two would
+# make a year-on-year delta compare a quarter against a year.
+#
+# Every taxonomy must register its annual form here. This is a registry
+# rather than a SQL literal because it was a literal, and adding India
+# silently dropped EVERY Indian balance-sheet fact: the flow facts passed on
+# duration, the instant ones matched no listed form, and the result was a
+# snapshot with revenue but no assets and therefore zero computable scores.
+ANNUAL_FORM_PREFIXES = ("10-K",)          # SEC EDGAR: 10-K, 10-K/A, 10-KSB...
+ANNUAL_FORM_EXACT = (
+    "DFP",           # Brazil / CVM   (quarterly counterpart 'ITR' is not ingested)
+    "DART-ANNUAL",   # South Korea    (quarterly reprt_codes are not ingested)
+    "BSE-ANNUAL",    # India / BSE    (only audited annual results are ingested)
+)
+
 DEFAULT_TAGS = sorted(
     FLOW_TAGS
     | {
@@ -112,6 +130,10 @@ def build_pit_snapshot(
         con.register("_tickers", pd.DataFrame({"ticker": tickers_u}))
         con.register("_tags", pd.DataFrame({"tag": list(tags)}))
         con.register("_flow_tags", pd.DataFrame({"tag": sorted(FLOW_TAGS)}))
+        annual_form_sql = " OR ".join(
+            [f"f.form LIKE '{p}%'" for p in ANNUAL_FORM_PREFIXES]
+            + ["f.form IN (" + ", ".join(f"'{v}'" for v in ANNUAL_FORM_EXACT) + ")"]
+        )
         df = con.execute(
             f"""
             WITH visible AS (
@@ -131,15 +153,12 @@ def build_pit_snapshot(
                          AND date_diff('day', f.start_date, f.fiscal_period_end) >= {MIN_ANNUAL_DAYS})
                         -- instant (balance-sheet/share) tags: fiscal-YEAR-END
                         -- values only, so YoY deltas compare annual balance
-                        -- sheets, not a 10-Q/quarterly filing against an
-                        -- annual one. 'DFP' (Brazil/CVM) and 'DART-ANNUAL'
-                        -- (South Korea) are each unambiguously annual by
-                        -- construction — their respective quarterly forms
-                        -- ('ITR', DART reprt_code 11012-11014) are separate
-                        -- datasets this project's cvm_br_client.py and
-                        -- dart_kr_client.py do not ingest.
+                        -- sheets and never a quarter against a year. The
+                        -- accepted forms come from ANNUAL_FORM_PREFIXES /
+                        -- ANNUAL_FORM_EXACT so a new taxonomy registers its
+                        -- form in one place instead of editing this SQL.
                         OR (f.tag NOT IN (SELECT tag FROM _flow_tags)
-                            AND (f.form LIKE '10-K%' OR f.form IN ('DFP', 'DART-ANNUAL')))
+                            AND ({annual_form_sql}))
                       )
             ),
             latest_filing AS (

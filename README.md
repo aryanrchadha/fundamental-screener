@@ -31,16 +31,53 @@ The Deflated Sharpe Ratio corrects for the fact that **four related
 hypotheses** were tested on the same data (F alone, Z alone, O alone, the
 composite). A strategy only "survives" if DSR > 0.95.
 
-## Known limitation: survivorship bias
+## Survivorship correction: run, and reported
 
-The default universe is **today's** S&P 500 constituent list applied to
-history, which overstates returns (winners survive). Wikipedia's historical
-changes table is ingested (`screener/universe.py`), and setting
-`USE_PIT_UNIVERSE = True` in `config.py` restricts each rebalance to actual
-constituents at that date — but the changes table is itself labeled
-"selected changes" and is incomplete in early years, so full correction
-(Project 58 in the broader portfolio) remains future work. Treat all
-backtest levels as optimistic.
+`--survivorship` restricts every rebalance to names actually listed/in the
+index on that date, writing to separate `*_pit` outputs so both runs stand
+side by side:
+
+```bash
+python -m screener.backtest   --universe sp500 --survivorship
+python -m screener.validation --universe sp500 --survivorship
+```
+
+**S&P 500** (Wikipedia's constituent-changes table unwound backwards; the
+2012 cross-section shrinks from 503 names to 294):
+
+| Strategy | Static | Corrected |
+|---|---|---|
+| Piotroski F-Score | −1.7% | −1.3% |
+| Altman Z-Score | −4.1% | −5.4% |
+| Ohlson O-Score | −6.0% | −4.2% |
+| **Composite** | **−0.7%** | **−1.3%** |
+
+The correction moves individual scores in both directions and changes no
+conclusion: nothing survives Deflated Sharpe either way.
+
+**KOSPI** (first-annual-filing dates pulled per company from DART; 13 of
+the 120 listed after 2016, so the 2016 universe is 107): the corrected run
+is **bit-for-bit identical** to the static one. That is not a null result
+— it is evidence the point-in-time discipline already works. Of the 362
+company-months the listing gate removed, **zero** had a computable score:
+a company that had not filed yet has no facts in the PIT snapshot, so
+look-ahead was structurally impossible rather than merely avoided.
+
+**What is still uncorrected, and why.** Both corrections handle *look-ahead*
+(names appearing before they existed). Neither fully handles *delisting*
+survivorship, and for Korea that limit was established empirically rather
+than assumed:
+
+- DART's `corp_cls` is a **current** attribute. Querying its filing index
+  with `corp_cls='Y'` returns 684 KOSPI filers for 2016 and reports zero
+  missing by 2025 — an impossible delisting rate, and purely an artefact of
+  the filter hiding anything since reclassified. Dropping the filter shows
+  2,097 companies filed in that window, 406 of which now carry class 'E'.
+- Those names cannot be priced anyway: Yahoo returned usable `.KS` history
+  for only **4 of a 40-name sample**, because it drops delisted KRX tickers.
+
+So the residual bias is quantified rather than silently corrected with data
+that does not exist. Treat all backtest levels as optimistic.
 
 ## International extension: Brazil / B3 (proof of concept)
 
@@ -241,6 +278,61 @@ constituent table to correct with.
 Filers outside these 120 may use tag spellings, share-class labels, or
 statement layouts the sweep didn't encounter.
 
+## International extension: India / BSE + Yahoo
+
+`pit_fundamentals/india_client.py` adds a fourth market — and it is built
+differently, because India's free data landscape is genuinely worse. Each
+of the other three regulators publishes machine-readable statements with a
+filing date on every number (EDGAR's `filed`, CVM's `DT_RECEB`, DART's
+`rcept_dt`). India has no free equivalent. What it has, established by
+direct request rather than assumption, is two halves:
+
+- **BSE's public API** serves audited-results announcements with a real
+  dissemination timestamp — Reliance's FY2024 results went out
+  2024-04-22T19:00:20. Authoritative filing dates. But the numbers sit in
+  an attached PDF: the XBRL URLs 404 and the structured-results endpoints
+  return BSE's HTML error page.
+- **Yahoo Finance** serves the values for `.NS` tickers, unusually
+  completely — every canonical tag including a direct `EBIT` and share
+  count. But it attaches no filing date at all.
+
+Neither is point-in-time capable alone. This adapter joins them: Yahoo
+values, gated by the BSE dissemination date of the announcement that first
+reported that period. The join is the contribution.
+
+```bash
+python -m pit_fundamentals.ingest --taxonomy bse-in --db data/pit_in.duckdb   # no API key
+```
+
+Universe: **top 100 by market cap** from BSE's own 5,082-name scrip master,
+filtered to those with ≥1000 days of Yahoo history
+(`screener/india_universe.csv`, tracked). Verification: **387/387
+company-years satisfy Assets = Liabilities + Equity to within 0.1%**, and
+filing lags run 9–134 days (median 40) — consistent with SEBI's 60-day
+audited-results deadline.
+
+Scores through the **unmodified** `screener/scores.py` (F 78/100, Z 79/100,
+O 80/100) land where they should:
+
+| Company | Altman Z | Reads as |
+|---|---|---|
+| **Vodafone Idea** | **−1.64** | *negative* Z — India's most distressed large-cap (AGR dues, negative net worth) |
+| IRFC | 0.37 | leveraged rail-financing entity |
+| Grasim, POWERGRID, NTPC, Tata Power, Adani Green | 0.7–1.4 | capital-intensive, heavily-geared utilities and infra |
+
+Vodafone Idea also tops the Ohlson O ranking — two independent distress
+models agreeing on the same name, with no tuning.
+
+**The PIT guarantee here is weaker, and that is a property of the source.**
+Yahoo serves one *current* value per period, so a figure revised later
+appears as though it always read that way. Look-ahead is prevented;
+restatement-blindness is not, `is_restatement` is always False, and the
+load-bearing restatement test has no Indian equivalent because the source
+cannot express one. Yahoo also gives only ~5 annual periods, leaving ~4
+scoreable years after year-on-year deltas — **enough for a screener, too
+short for a backtest**, which is why India is not registered as a backtest
+universe.
+
 ## Setup
 
 ```bash
@@ -308,11 +400,14 @@ from pit_fundamentals import get_fact_as_of, build_pit_snapshot
 pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
   edgar_client.py     # SEC EDGAR HTTP client (rate-limited, cached)
   cvm_br_client.py     # Brazil/CVM Dados Abertos adapter (verified live)
-  dart_kr_client.py    # South Korea/DART adapter (live-verified on Samsung)
-  ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr}
+  dart_kr_client.py    # South Korea/DART adapter (verified on 21 KOSPI names)
+  india_client.py      # India: BSE filing dates joined to Yahoo values
+  ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr, bse-in}
 screener/           # universe, scores, normalize, composite, backtest, validation
   universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk
-  universe_kr.py       # KOSPI crosswalk loader (120 names)
+  universe_kr.py       # KOSPI crosswalk loader (120 names) + listing dates
+  universe_in.py       # India crosswalk loader (100 names)
+  india_universe.csv   # NSE ticker -> BSE scrip, tracked
   kospi_universe.csv   # the universe itself, tracked so a clean clone reproduces it
   universes.py         # Universe defs: suffix, bucket count, paths, currency
 dashboard/          # Plotly Dash app (6 views)

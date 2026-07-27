@@ -170,8 +170,11 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Newey-West + Deflated Sharpe validation")
     p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--survivorship", action="store_true")
     args = p.parse_args()
     uni = get_universe(args.universe)
+    if args.survivorship:
+        uni = uni.corrected()
 
     panel = pd.read_parquet(uni.panel_path).set_index(["as_of_date", "ticker"])
     dec = pd.read_parquet(uni.bucket_returns_path)
@@ -182,8 +185,9 @@ def main() -> None:
     roll.to_parquet(uni.rolling_path)
 
     pd.set_option("display.width", 140)
+    mode = "survivorship-corrected" if uni.survivorship_corrected else "static universe"
     print(f"\n=== Validation summary — {uni.name} "
-          f"(D{uni.n_buckets} - D1 monthly spreads, {uni.currency}) ===\n")
+          f"(D{uni.n_buckets} - D1 monthly spreads, {uni.currency}, {mode}) ===\n")
     print(summary.round(3).to_string())
     comp = summary.loc[["Composite (LASSO)"]] if "Composite (LASSO)" in summary.index else summary
     verdict = bool(comp["survives_95"].iloc[0]) if len(comp) else False
