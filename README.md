@@ -31,6 +31,23 @@ The Deflated Sharpe Ratio corrects for the fact that **four related
 hypotheses** were tested on the same data (F alone, Z alone, O alone, the
 composite). A strategy only "survives" if DSR > 0.95.
 
+**Across all three markets** — S&P 500, KOSPI 120, BSE 100 — plus the
+survivorship-corrected re-runs, that bar is never cleared:
+
+| Market | Months | Composite ann. | NW t | DSR | Survives? |
+|---|---|---|---|---|---|
+| US — S&P 500 | 167 | −0.7% | −0.29 | 0.092 | No |
+| US, survivorship-corrected | 167 | −1.3% | −0.42 | 0.067 | No |
+| Korea — KOSPI 120 | 105 | +2.4% | +0.33 | 0.238 | No |
+| Korea, survivorship-corrected | 105 | +2.4% | +0.33 | 0.238 | No |
+| India — BSE 100 | 26 † | +2.1% † | +0.34 † | 0.233 † | No † |
+
+† Descriptive only, not a test: India's composite ranking has a median
+month-to-month rank correlation of 0.998 and updates on just three annual
+filings, so its effective sample is nearer 3 than 26. Reported for
+completeness; the pipeline still refuses to emit a validation table for it.
+Full reasoning in [FINDINGS.md](FINDINGS.md).
+
 ## Survivorship correction: run, and reported
 
 `--survivorship` restricts every rebalance to names actually listed/in the

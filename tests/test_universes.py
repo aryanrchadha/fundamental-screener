@@ -156,3 +156,85 @@ def test_dashboard_renders_without_backtest_artifacts(tmp_path, monkeypatch):
     rendered = str(app.layout)
     assert "not available for india" in rendered
     assert "Screener table" in rendered and "Sector heatmap" in rendered
+
+
+def test_screen_writes_a_panel_and_no_backtest_artifacts(tmp_path, monkeypatch):
+    """run_screen must produce the scores panel and NOTHING else. FINDINGS.md
+    states India emits no validation table; this is what keeps that true, so
+    a future refactor cannot quietly start publishing statistics the data
+    cannot support."""
+    from dataclasses import replace
+
+    import pandas as pd
+
+    import screener.backtest as bt
+    from screener.universes import INDIA
+
+    dates = pd.to_datetime(["2025-01-31", "2025-02-28"])
+    tickers = [f"T{i}" for i in range(40)]
+
+    def fake_panel(rebalance_dates, tks, sectors, prices, membership=None, db_path=None):
+        idx = pd.MultiIndex.from_product([dates, tickers], names=["as_of_date", "ticker"])
+        df = pd.DataFrame(index=idx)
+        for c in ["f_score_z", "z_score_z", "o_score_z"]:
+            df[c] = 1.0
+        for c in ["f_score", "z_score", "o_score", "fwd_ret_1m", "fwd_ret_demeaned"]:
+            df[c] = 0.5
+        df["sector"] = "Technology"
+        return df
+
+    monkeypatch.setattr(bt, "build_scores_panel", fake_panel)
+    monkeypatch.setattr(bt, "get_monthly_prices",
+                        lambda *a, **k: pd.DataFrame(1.0, index=dates, columns=tickers))
+    monkeypatch.setattr(type(INDIA), "tickers", lambda self: tickers)
+    monkeypatch.setattr(type(INDIA), "sectors", lambda self: pd.Series("Technology", index=tickers))
+
+    uni = replace(
+        INDIA, start="2025-01-01", end="2025-03-31",
+        panel_path=tmp_path / "panel.parquet",
+        bucket_returns_path=tmp_path / "returns.parquet",
+        coefs_path=tmp_path / "coefs.parquet",
+        validation_path=tmp_path / "validation.csv",
+        rolling_path=tmp_path / "rolling.parquet",
+    )
+    bt.run_screen(uni)
+
+    assert uni.panel_path.exists()
+    for should_not_exist in (uni.bucket_returns_path, uni.coefs_path,
+                             uni.validation_path, uni.rolling_path):
+        assert not should_not_exist.exists(), f"{should_not_exist.name} must not be written"
+
+
+def test_screen_composite_is_equal_weight_not_fitted(tmp_path, monkeypatch):
+    """A LASSO fit on ~3 independent cross-sections would be fitting noise,
+    so screener-only universes use the documented equal-weight prior. The
+    composite must be exactly the mean of the three z-scores."""
+    from dataclasses import replace
+
+    import pandas as pd
+
+    import screener.backtest as bt
+    from screener.universes import INDIA
+
+    dates = pd.to_datetime(["2025-01-31"])
+    tickers = [f"T{i}" for i in range(30)]
+
+    def fake_panel(*a, **k):
+        idx = pd.MultiIndex.from_product([dates, tickers], names=["as_of_date", "ticker"])
+        df = pd.DataFrame(index=idx)
+        df["f_score_z"] = 1.0
+        df["z_score_z"] = 2.0
+        df["o_score_z"] = 3.0
+        df["fwd_ret_1m"] = 0.0
+        return df
+
+    monkeypatch.setattr(bt, "build_scores_panel", fake_panel)
+    monkeypatch.setattr(bt, "get_monthly_prices",
+                        lambda *a, **k: pd.DataFrame(1.0, index=dates, columns=tickers))
+    monkeypatch.setattr(type(INDIA), "tickers", lambda self: tickers)
+    monkeypatch.setattr(type(INDIA), "sectors", lambda self: pd.Series("Tech", index=tickers))
+
+    uni = replace(INDIA, start="2025-01-01", end="2025-02-28",
+                  panel_path=tmp_path / "p.parquet")
+    panel = bt.run_screen(uni)
+    assert (panel["composite_score"] == 2.0).all()   # mean(1, 2, 3), no fitted weights

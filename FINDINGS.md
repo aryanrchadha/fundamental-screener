@@ -1,12 +1,47 @@
 # FINDINGS — Composite Fundamental Screener
 
-*Research memo. Sample: S&P 500 (current constituents), monthly rebalance,
-2012-01 to 2025-12 (167 monthly D10−D1 spread observations). Scores are
-sector-neutral z-scores; deciles are equal-weight; spreads are decile 10
-(best score) minus decile 1 (worst). All fundamentals are point-in-time,
-gated by SEC filing date.*
+*Research memo covering three markets — the S&P 500 (SEC EDGAR), the KOSPI
+120 (Korea's DART), and the BSE 100 (India) — plus survivorship-corrected
+re-runs of the two that support a backtest. Scores are sector-neutral
+z-scores; buckets are equal-weight; the spread is the top bucket minus the
+bottom. All fundamentals are point-in-time, gated by the real filing date
+in every market.*
 
-## Validation summary
+## Cross-market summary
+
+Composite (LASSO where fitted, equal-weight prior otherwise), top-minus-
+bottom bucket:
+
+| Market | Names | Buckets | Months | Ann. return | NW t | DSR | Survives 95%? |
+|---|---|---|---|---|---|---|---|
+| **US** — S&P 500 | 503 | deciles | 167 | −0.7% | −0.29 | 0.092 | **No** |
+| US, survivorship-corrected | 294→493 | deciles | 167 | −1.3% | −0.42 | 0.067 | **No** |
+| **Korea** — KOSPI 120 | 120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** |
+| Korea, survivorship-corrected | 107→120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** (identical) |
+| **India** — BSE 100 | 100 | quintiles | 26 † | +2.1% † | +0.34 † | 0.233 † | **No** † |
+
+**† India's row is DESCRIPTIVE, not inferential, and should not be read as
+a test.** It is included for completeness rather than omitted, because the
+numbers are computable and hiding them would be its own distortion — but
+the sample cannot support the statistics beside it. The reason is
+measured, not asserted: across the 27 monthly cross-sections the composite
+ranking has a **median month-to-month Spearman correlation of 0.998**. The
+fundamental content updates only **three times** (the FY2024, FY2025 and
+FY2026 annual filings); the slight monthly drift is the price term inside
+Altman Z, not new information. So the nominal N of 26 monthly observations
+carries an effective N closer to 3, and since standard errors scale as
+1/√N, a t-statistic computed on 26 overstates precision by roughly
+√(26/3) ≈ 2.9×. Deflating the +0.34 by that factor gives ≈ +0.11.
+
+The conclusion is unaffected either way, which is why including the row
+costs nothing: at +0.34 the naive t-stat is already far from significance,
+so India neither strengthens nor weakens the finding. `screener/backtest.py`
+still refuses to emit a validation table for India (`backtestable=False`),
+and the dashboard still hides the views that would depend on one.
+
+**Read across the table: five market-configurations, zero survivors.**
+
+## Validation summary — S&P 500 (the primary sample)
 
 | Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat (lag 4) | Skew | Kurtosis | DSR | Survives 95%? |
 |---|---|---|---|---|---|---|---|
@@ -577,10 +612,13 @@ so `is_restatement` is always False and the load-bearing restatement test
 that anchors the EDGAR, CVM and DART paths has no Indian equivalent — the
 source physically cannot express one. Look-ahead is prevented;
 restatement-blindness is not. Yahoo also supplies only ~5 annual periods,
-leaving ~4 scoreable years after the year-on-year deltas, which is enough
-for a screener and too short for the Newey-West/DSR machinery. India is
-therefore deliberately **not** registered as a backtest universe, rather
-than being given a backtest its data cannot support.
+leaving three broad annual cross-sections after the year-on-year deltas.
+India is therefore registered with `backtestable=False`: `run_screen()`
+writes the scores panel and stops, and no validation table is produced.
+The quantitative justification — a 0.998 median month-to-month rank
+correlation and an effective sample nearer 3 than 26 — is in the
+cross-market summary at the top of this memo, alongside India's
+descriptive spread.
 
 ## Bottom line
 
@@ -606,8 +644,15 @@ with each rebalance restricted to names actually listed at the time leaves
 the US conclusion unchanged (individual scores move in both directions,
 none survives) and leaves the Korean result numerically identical, because
 the filing-date gate had already made look-ahead impossible. Adding India
-as a fourth market extends the screen but not the evidence base — its data
-supports ~4 scoreable years, so it gets a screener and explicitly not a
-backtest. Across everything actually testable here, the count stands at
-**eight strategy-market pairs, four survivorship-corrected re-runs, and
-zero survivors.**
+extends the screen but deliberately not the evidence base: its composite
+ranking has a median month-to-month rank correlation of 0.998 and updates
+on only three annual filings, so its 26 monthly observations carry an
+effective sample nearer 3. Its descriptive spread (+2.1%/yr, naive t
++0.34) is reported in the cross-market table for completeness and marked
+as not a test.
+
+Across everything here — **eight strategy-market pairs, two
+survivorship-corrected re-runs, five market-configurations, three
+regulators and three accounting taxonomies — there are zero survivors.**
+That consistency is the result. It is also why the reusable part of this
+project is the point-in-time infrastructure rather than the signal.
