@@ -56,20 +56,39 @@ for **that window's own DSR to reach 95%**. It is the DSR inverted, and the
 correspondence is exact — "outside the band" and "DSR ≥ 0.95" agree on 100%
 of test windows.
 
-| | Windows clearing the DSR hurdle | Median hurdle | Mean spread |
-|---|---|---|---|
-| **Korea** (KOSPI 120) | **12 / 82** — all ending Feb 2019 – May 2020 | +13.9%/yr | −2.1%/yr |
-| **US** (S&P 500) | **0 / 144** | +18.5%/yr | −0.1%/yr |
+The same chart is produced for **every** backtestable run — `--universe
+sp500` and `--universe kospi`, each with and without `--survivorship`:
 
-Korea's rolling spread by window-year: **2019 +24%**, 2020 +8%, 2021 −14%,
-2022 −26%, 2023 −2%, 2024 −1%, 2025 −2%. That is real decay — an early
-stretch that beat a multiple-testing-corrected benchmark, then five years
-that did not. The US never clears the bar at any point, so the two markets
-fail in genuinely different ways. Caveat in
-[FINDINGS.md](FINDINGS.md): the clearing windows lean partly on the
-thinnest Korean cross-sections (median 80 scored names vs 99 later).
+| Run | Clears DSR hurdle | Breaches negative hurdle | Median hurdle | Mean spread |
+|---|---|---|---|---|
+| US S&P 500 (static) | **0 / 144** | 1 / 144 | +18.5%/yr | −0.1%/yr |
+| US, survivorship-corrected | 20 / 144 † | **27 / 144** | +8.5%/yr | −0.5%/yr |
+| Korea KOSPI 120 | **12 / 82** — all Feb 2019 – May 2020 | 19 / 82 | +13.9%/yr | −2.1%/yr |
+| Korea, survivorship-corrected | identical to static | | | |
 
-View it with `python -m dashboard.app --universe kospi` → "Rolling spread".
+Rolling spread by window-year:
+
+| | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **US** | −21% | −19% | −3% | +4% | +6% | +5% | +3% | +2% | +3% | +2% | −2% | −1% | +0% |
+| **Korea** | | | | | | | **+24%** | +8% | −14% | −26% | −2% | −1% | −2% |
+
+**Korea shows real decay** — an early stretch beating a
+multiple-testing-corrected benchmark, then five years that do not. **The US
+never clears the bar in its headline configuration**, so the two fail in
+genuinely different ways.
+
+† **Do not read the corrected-US row as a positive result.** Its 20
+clearing windows are outnumbered by 27 significantly *negative* ones, and
+the full-sample verdict on that exact series is composite −1.3%/yr, t
+−0.42, DSR 0.067 — a decisive failure. A null series with time-varying
+volatility will throw off stretches that clear a 95% bar; quoting them is
+the selection error the DSR exists to prevent. Full discussion in
+[FINDINGS.md](FINDINGS.md), along with the caveat that Korea's clearing
+windows lean partly on its thinnest cross-sections.
+
+View any of them with e.g. `python -m dashboard.app --universe sp500` →
+"Rolling spread".
 
 ## Survivorship correction: run, and reported
 

@@ -547,12 +547,59 @@ period after. The strongest stretch therefore leans partly on the thinnest
 data, and some of that +24% is likely small-cross-section noise rather than
 signal.
 
-**The US, by contrast, never clears it at all — 0 of 144 windows**, median
-hurdle +18.5%/yr, mean spread −0.1%/yr. The two markets fail differently:
-Korea's effect decayed, while the US effect is absent throughout the
-sample. That distinction only becomes visible with a DSR-derived band; a
-plain SE band would have flagged 11% of Korean and 7% of US windows and
-obscured the difference.
+**US (144 windows, Dec 2013 – Nov 2025), median hurdle +18.5%/yr:**
+
+| Window year | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Static | −21% | −19% | −3% | +4% | +6% | +5% | +3% | +2% | +3% | +2% | −2% | −1% | +0% |
+| Surv.-corrected | −23% | −19% | −0% | +12% | +6% | +2% | +4% | +4% | −4% | −9% | −1% | +0% | +0% |
+
+**The static US run clears the hurdle in 0 of 144 windows.** Its shape is
+also different from Korea's: a deep negative patch in 2013–2015 driven by
+the thin early cross-section (120–150 scored names), then a mildly positive
+plateau of +2% to +6% from 2016–2022 that never approaches the +18.5%
+hurdle, then back to flat. No decay, because there was never anything to
+decay from.
+
+### A result worth not overselling: the corrected US run *does* clear 20 windows
+
+The survivorship-corrected US series behaves differently enough to be worth
+recording. **20 of its 144 windows clear the DSR hurdle** — all ending
+between September 2015 and July 2020, with realized spreads of +8.8% to
++15.4% against hurdles of 5.5% to 10.1%. The static and corrected spread
+series correlate only 0.459, so they are genuinely different series rather
+than a rescaling: the corrected universe drops ~40% of names in the early
+years, and its rolling volatility is lower through that stretch, which
+lowers the hurdle enough for the mid-decade spread to clear it.
+
+It would be easy to present that as the project's one positive finding. It
+is not, for two reasons stated together:
+
+1. In the same corrected run, **27 of 144 windows breach the NEGATIVE
+   hurdle** — more significantly-bad stretches (19%) than
+   significantly-good ones (14%).
+2. The full-sample verdict on exactly this series is unambiguous: composite
+   annualized −1.3%, Newey-West t −0.42, **DSR 0.067**. It fails decisively.
+
+That combination is precisely the pathology the Deflated Sharpe Ratio
+exists to catch. A null series with time-varying volatility will produce
+stretches that clear a 95% bar; selecting those stretches after the fact is
+itself a testing decision, and one the DSR's N_trials = 4 does not account
+for. The rolling chart is a diagnostic for *shape*, not a licence to quote
+its best windows. Read on the whole sample — which is the only reading that
+is not conditioned on the outcome — the corrected US composite is the
+second-worst of the eight strategy-market pairs in this memo.
+
+Korea static and corrected produce identical rolling series, for the reason
+established in the survivorship section: the listing gate removed only
+company-months that had no computable score.
+
+The Korea-versus-US contrast survives all of this. Korea's decay is a
+first-half/second-half collapse (−0.1%/yr to −4.1%/yr) with every clearing
+window in the first 16 months of the sample. The US never clears at all in
+its headline configuration. That distinction only becomes visible with a
+DSR-derived band; a plain SE band flags 11% of Korean and 7% of US windows
+and obscures it.
 
 ## Survivorship correction, run for both backtestable universes
 
