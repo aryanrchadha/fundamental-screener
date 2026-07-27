@@ -97,3 +97,62 @@ def test_unknown_ticker_still_gets_a_column(monkeypatch, tmp_path):
     )
     assert list(out.columns) == ["005930", "999999"]
     assert out["999999"].isna().all()
+
+
+def test_india_is_registered_but_not_backtestable():
+    """India's source yields ~3 usable annual cross-sections — enough to
+    rank a screen, nowhere near enough for return-series inference. The
+    flag is what stops the pipeline producing a validation table that would
+    look like evidence."""
+    from screener.universes import INDIA
+
+    assert INDIA.backtestable is False
+    assert SP500.backtestable is True and KOSPI.backtestable is True
+    assert INDIA.price_symbol_suffix == ".NS"
+    assert INDIA.currency == "INR"
+    assert get_universe("india") is INDIA
+
+
+def test_all_three_universes_have_distinct_paths():
+    from screener.universes import INDIA
+
+    for attr in ("db_path", "prices_cache", "panel_path", "bucket_returns_path",
+                 "validation_path", "rolling_path"):
+        paths = {getattr(u, attr) for u in (SP500, KOSPI, INDIA)}
+        assert len(paths) == 3, f"{attr} collides across universes"
+
+
+def test_dashboard_renders_without_backtest_artifacts(tmp_path, monkeypatch):
+    """The dashboard must degrade honestly: with no bucket returns,
+    validation table or rolling spread on disk, it still builds, and the
+    dependent tabs show an explanation instead of an empty chart."""
+    import pandas as pd
+    from dataclasses import replace
+
+    import dashboard.app as appmod
+    from screener.universes import INDIA
+
+    dates = pd.to_datetime(["2025-01-31", "2025-02-28"])
+    rows = []
+    for d in dates:
+        for i in range(30):
+            rows.append(dict(as_of_date=d, ticker=f"T{i}", sector="Technology" if i % 2 else "Energy",
+                             f_score=float(i % 10), z_score=1.0 + i / 10, o_score=-5.0 - i / 10,
+                             f_score_z=0.0, z_score_z=0.0, o_score_z=0.0,
+                             composite_score=float(i), decile=float(i % 5 + 1),
+                             fwd_ret_1m=0.01 * (i % 7 - 3), fwd_ret_demeaned=0.0))
+    panel_path = tmp_path / "panel.parquet"
+    pd.DataFrame(rows).to_parquet(panel_path)
+
+    uni = replace(INDIA, panel_path=panel_path,
+                  bucket_returns_path=tmp_path / "absent_returns.parquet",
+                  validation_path=tmp_path / "absent_validation.csv",
+                  rolling_path=tmp_path / "absent_rolling.parquet")
+    panel, dec, summary, roll = appmod.load_data(uni)
+    assert dec is None and summary is None and roll is None   # absent, not fabricated
+    assert len(panel) == 60
+
+    app = appmod.build_app(uni)          # must not raise
+    rendered = str(app.layout)
+    assert "not available for india" in rendered
+    assert "Screener table" in rendered and "Sector heatmap" in rendered

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from pathlib import Path
+
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import Dash, dash_table, dcc, html
@@ -20,11 +22,22 @@ from screener.universes import get_universe
 
 
 def load_data(universe="sp500"):
+    """Load whatever artifacts this universe actually has.
+
+    A screener-only universe (India) has a scores panel but no return
+    series, validation table or rolling spread, because no backtest is run
+    for it. Those come back as None and the views that depend on them are
+    replaced by an explanation rather than an empty or fabricated chart.
+    """
     uni = get_universe(universe) if isinstance(universe, str) else universe
     panel = pd.read_parquet(uni.panel_path)
-    dec = pd.read_parquet(uni.bucket_returns_path)
-    summary = pd.read_csv(uni.validation_path, index_col=0)
-    roll = pd.read_parquet(uni.rolling_path)
+
+    def _maybe(path, reader):
+        return reader(path) if Path(path).exists() else None
+
+    dec = _maybe(uni.bucket_returns_path, pd.read_parquet)
+    summary = _maybe(uni.validation_path, lambda p: pd.read_csv(p, index_col=0))
+    roll = _maybe(uni.rolling_path, pd.read_parquet)
     return panel, dec, summary, roll
 
 
@@ -97,30 +110,54 @@ def build_app(universe="sp500") -> Dash:
         style_table={"overflowX": "auto"},
         style_cell={"fontFamily": "monospace", "fontSize": 13},
     )
-    summary_txt = html.Pre(summary.round(3).to_string(),
-                           style={"fontSize": 14, "background": "#f6f6f6", "padding": "1em"})
+
+    def _unavailable(view: str) -> html.Div:
+        """Shown instead of a backtest view the data cannot support."""
+        return html.Div(style={"padding": "2em", "background": "#fff8e1",
+                               "border": "1px solid #e0c060", "marginTop": "1em"},
+                        children=[
+            html.H4(f"{view} is not available for {uni.name}"),
+            html.P(f"No backtest is run for this universe. Its source supports too "
+                   f"few independent cross-sections for a return series to mean "
+                   f"anything, so no bucket returns, rolling spread or "
+                   f"Newey-West / Deflated-Sharpe table are produced."),
+            html.P("Showing an empty or placeholder chart here would imply evidence "
+                   "that does not exist. The screener table, sector heatmap and "
+                   "F-Score scatter are built from the scores panel and are real."),
+        ])
+
+    tabs = [
+        dcc.Tab(label="Screener table", children=[
+            html.P(f"Latest cross-section ({panel['as_of_date'].max():%Y-%m-%d}). "
+                   "Filter boxes accept e.g. >5 or contains Tech."),
+            table,
+        ]),
+        dcc.Tab(label="Sector heatmap", children=[dcc.Graph(figure=fig_sector_heatmap(panel))]),
+        dcc.Tab(label="Bucket returns", children=[
+            dcc.Graph(figure=fig_decile_cumret(dec, uni.n_buckets)) if dec is not None
+            else _unavailable("Bucket returns")]),
+        dcc.Tab(label="F-Score scatter", children=[dcc.Graph(figure=fig_f_scatter(panel))]),
+        dcc.Tab(label="Rolling spread", children=[
+            dcc.Graph(figure=fig_rolling(roll)) if roll is not None
+            else _unavailable("Rolling spread")]),
+        dcc.Tab(label="Validation", children=(
+            [html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),
+             html.Pre(summary.round(3).to_string(),
+                      style={"fontSize": 14, "background": "#f6f6f6", "padding": "1em"}),
+             html.P("survives_95 = Deflated Sharpe Ratio > 0.95 after correcting for "
+                    "4 related trials (F, Z, O, composite) with empirical skew/kurtosis.")]
+            if summary is not None else [_unavailable("Validation summary")])),
+    ]
 
     app.layout = html.Div(
         style={"maxWidth": "1200px", "margin": "auto", "fontFamily": "sans-serif"},
         children=[
             html.H2(f"Composite Fundamental Screener — {uni.name} ({uni.currency})"),
-            dcc.Tabs([
-                dcc.Tab(label="Screener table", children=[
-                    html.P(f"Latest cross-section ({panel['as_of_date'].max():%Y-%m-%d}). "
-                           "Filter boxes accept e.g. >5 or contains Tech."),
-                    table,
-                ]),
-                dcc.Tab(label="Sector heatmap", children=[dcc.Graph(figure=fig_sector_heatmap(panel))]),
-                dcc.Tab(label="Bucket returns", children=[dcc.Graph(figure=fig_decile_cumret(dec, uni.n_buckets))]),
-                dcc.Tab(label="F-Score scatter", children=[dcc.Graph(figure=fig_f_scatter(panel))]),
-                dcc.Tab(label="Rolling spread", children=[dcc.Graph(figure=fig_rolling(roll))]),
-                dcc.Tab(label="Validation", children=[
-                    html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),
-                    summary_txt,
-                    html.P("survives_95 = Deflated Sharpe Ratio > 0.95 after correcting for "
-                           "4 related trials (F, Z, O, composite) with empirical skew/kurtosis."),
-                ]),
-            ]),
+            html.P(("Screener only — no backtest is run for this universe."
+                    if not uni.backtestable else
+                    f"{uni.n_buckets} buckets, monthly rebalance, returns in {uni.currency}."),
+                   style={"color": "#666"}),
+            dcc.Tabs(tabs),
         ],
     )
     return app
@@ -130,7 +167,7 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser(description="Composite fundamental screener dashboard")
-    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi", "india"])
     p.add_argument("--port", type=int, default=8050)
     a = p.parse_args()
     build_app(a.universe).run(debug=False, port=a.port)

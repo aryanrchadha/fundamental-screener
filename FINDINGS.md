@@ -557,6 +557,20 @@ distress models agreeing, with no tuning, on India's most famously
 distressed large-cap. The leveraged utilities and infra names (IRFC,
 POWERGRID, NTPC, Tata Power, Adani Green) cluster immediately above it.
 
+**The screen itself.** 2,700 company-months across 27 dates, 77 of 100
+names scored in the latest cross-section, composite = equal-weight average
+of the three sector-neutral z-scores (a LASSO fit on ~3 independent
+fundamental cross-sections would be fitting noise). The ranking separates
+the recognisable Indian quality cohort — HDFC AMC, Pidilite (F = 9),
+Cummins India, Divi's Laboratories, DMart — from the capital-intensive and
+heavily-geared one — Grasim (Z = 0.75), Hindalco, Adani Enterprises, Tata
+Motors PV. Worth noting the mechanism: this is the *sector-neutral*
+composite, so Nestlé India sits in the bottom quintile on a raw Altman Z of
+23.8 because it trails its Consumer Defensive peers, not because it is
+distressed. That is the sector-neutralisation working as designed, and it
+is a reason to read the composite as a within-sector ranking rather than an
+absolute safety score.
+
 **The honest weakness.** Yahoo serves one *current* value per fiscal
 period. A figure revised later appears as though it always read that way,
 so `is_restatement` is always False and the load-bearing restatement test

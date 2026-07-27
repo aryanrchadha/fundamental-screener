@@ -59,6 +59,12 @@ class Universe:
     # When True, each rebalance is restricted to names that were actually
     # listed/constituents on that date (survivorship-bias-corrected mode).
     survivorship_corrected: bool = False
+    # False for markets whose data cannot support a return-series backtest.
+    # India's source yields ~3 usable annual cross-sections, which is enough
+    # to rank a screen and far too little for Newey-West/Deflated-Sharpe
+    # inference, so no bucket returns or validation table are produced for
+    # it and the dashboard hides the views that would depend on them.
+    backtestable: bool = True
     # Populated lazily so importing this module never triggers a network call.
     _tickers: tuple[str, ...] | None = field(default=None)
 
@@ -124,6 +130,19 @@ class SP500Universe(Universe):
 
 
 @dataclass(frozen=True)
+class IndiaUniverse(Universe):
+    def tickers(self) -> list[str]:
+        from screener.universe_in import get_in_universe
+
+        return list(get_in_universe().keys())
+
+    def sectors(self) -> pd.Series:
+        from screener.universe_in import get_in_sectors
+
+        return pd.Series(get_in_sectors())
+
+
+@dataclass(frozen=True)
 class KospiUniverse(Universe):
     def tickers(self) -> list[str]:
         from screener.universe_kr import get_kr_blue_chips
@@ -178,7 +197,24 @@ KOSPI = KospiUniverse(
     end=config.KR_BACKTEST_END,
 )
 
-UNIVERSES: dict[str, Universe] = {u.name: u for u in (SP500, KOSPI)}
+INDIA = IndiaUniverse(
+    name="india",
+    currency="INR",
+    price_symbol_suffix=".NS",
+    db_path=config.IN_DB_PATH,
+    n_buckets=config.IN_N_BUCKETS,
+    prices_cache=config.IN_PRICES_CACHE_PATH,
+    panel_path=config.IN_SCORES_PANEL_PATH,
+    bucket_returns_path=config.IN_BUCKET_RETURNS_PATH,
+    coefs_path=config.IN_COEFS_PATH,
+    validation_path=config.IN_VALIDATION_SUMMARY_PATH,
+    rolling_path=config.IN_ROLLING_SPREAD_PATH,
+    start=config.IN_SCREEN_START,
+    end=config.IN_SCREEN_END,
+    backtestable=False,
+)
+
+UNIVERSES: dict[str, Universe] = {u.name: u for u in (SP500, KOSPI, INDIA)}
 
 
 def get_universe(name: str) -> Universe:

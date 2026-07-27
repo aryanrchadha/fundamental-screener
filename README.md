@@ -301,7 +301,9 @@ values, gated by the BSE dissemination date of the announcement that first
 reported that period. The join is the contribution.
 
 ```bash
-python -m pit_fundamentals.ingest --taxonomy bse-in --db data/pit_in.duckdb   # no API key
+python -m pit_fundamentals.ingest --taxonomy bse-in --db data/pit_in.duckdb  # no API key
+python -m screener.backtest --universe india                                 # runs the screen
+python -m dashboard.app     --universe india                                 # localhost:8050
 ```
 
 Universe: **top 100 by market cap** from BSE's own 5,082-name scrip master,
@@ -322,6 +324,42 @@ O 80/100) land where they should:
 
 Vodafone Idea also tops the Ohlson O ranking — two independent distress
 models agreeing on the same name, with no tuning.
+
+### The screen, and what the dashboard shows
+
+`--universe india` runs `run_screen()`: it builds the scores panel and
+**stops**, deliberately producing no bucket returns and no validation
+table. 2,700 company-months across 27 dates, 77 of 100 names scored in the
+latest cross-section. The composite here is the documented **equal-weight**
+prior rather than a LASSO fit — fitting three coefficients on ~3
+independent fundamental cross-sections would be fitting noise.
+
+Latest cross-section, top and bottom of the composite ranking:
+
+| | Company | F | Z | O | Sector |
+|---|---|---|---|---|---|
+| **Top** | HDFC Asset Management | 8 | 89.1 | −18.3 | Financial Services |
+| | Pidilite Industries | 9 | 25.3 | −12.1 | Basic Materials |
+| | Cummins India | 8 | 36.6 | −12.5 | Industrials |
+| | Divi's Laboratories | 6 | 38.8 | −13.4 | Healthcare |
+| **Bottom** | Grasim Industries | 6 | 0.75 | −9.0 | Basic Materials |
+| | Hindalco Industries | 3 | 2.02 | −9.6 | Basic Materials |
+| | Adani Enterprises | 4 | 2.19 | −9.1 | Energy |
+| | Tata Motors Passenger Vehicles | 4 | 1.33 | −9.6 | Consumer Cyclical |
+
+The top is the recognisable Indian quality cohort — asset-light,
+cash-generative, low-leverage — and the bottom is the capital-intensive,
+heavily-geared one. Note this is the *sector-neutral composite*, so a name
+can carry a high raw Z and still rank low if it trails its own sector
+(Nestlé India, raw Z = 23.8, sits in the bottom quintile against Consumer
+Defensive peers).
+
+**The dashboard degrades honestly.** Three views are real for India — the
+searchable table, the sector heatmap, and the F-Score vs forward-return
+scatter, all built from the scores panel. The three that depend on a
+backtest (bucket returns, rolling spread, validation summary) render an
+explanation of *why* they are absent instead of an empty chart, because a
+blank axis would imply evidence that was never produced.
 
 **The PIT guarantee here is weaker, and that is a property of the source.**
 Yahoo serves one *current* value per period, so a figure revised later
@@ -364,6 +402,11 @@ python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2015 2016 2017 2018
 python -m screener.backtest    --universe kospi
 python -m screener.validation  --universe kospi
 python -m dashboard.app        --universe kospi
+
+# India (top 100 by market cap) — screener only, no key needed
+python -m pit_fundamentals.ingest --taxonomy bse-in --db data/pit_in.duckdb
+python -m screener.backtest --universe india
+python -m dashboard.app     --universe india
 
 pytest                                               # full test suite
 ```
@@ -410,7 +453,7 @@ screener/           # universe, scores, normalize, composite, backtest, validati
   india_universe.csv   # NSE ticker -> BSE scrip, tracked
   kospi_universe.csv   # the universe itself, tracked so a clean clone reproduces it
   universes.py         # Universe defs: suffix, bucket count, paths, currency
-dashboard/          # Plotly Dash app (6 views)
+dashboard/          # Plotly Dash app (6 views; hides backtest views for screener-only universes)
 tests/              # score formulas, normalization, CV-leakage guard, PIT-universe exclusion
 notebooks/          # colab_quickstart.ipynb — full pipeline end to end
 config.py           # universe, dates, TTLs, SEC User-Agent, toggles

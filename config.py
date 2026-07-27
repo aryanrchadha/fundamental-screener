@@ -81,9 +81,6 @@ CACHE_TTL_YAHOO = 1 * 86400
 CACHE_TTL_SECTOR = 180 * 86400    # sector classification rarely changes
 
 # ---------------------------------------------------------------------------
-# Modeling
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # KOSPI (South Korea) universe — see screener/universes.py
 # ---------------------------------------------------------------------------
 KR_DB_PATH = DATA_DIR / "pit_kr.duckdb"
@@ -107,13 +104,36 @@ KR_BACKTEST_END = "2025-12-31"
 # noise rather than a cross-sectional signal.
 KR_N_BUCKETS = 5
 
+# ---------------------------------------------------------------------------
+# India (BSE/NSE) — screener only, see screener/universes.py
+# ---------------------------------------------------------------------------
+IN_DB_PATH = DATA_DIR / "pit_in.duckdb"
+IN_PRICES_CACHE_PATH = DATA_DIR / "in_prices_monthly.parquet"
+IN_SCORES_PANEL_PATH = DATA_DIR / "in_scores_panel.parquet"
+IN_BUCKET_RETURNS_PATH = DATA_DIR / "in_bucket_returns.parquet"   # never written
+IN_COEFS_PATH = DATA_DIR / "in_lasso_coefs.parquet"               # never written
+IN_VALIDATION_SUMMARY_PATH = DATA_DIR / "in_validation_summary.csv"  # never written
+IN_ROLLING_SPREAD_PATH = DATA_DIR / "in_rolling_spread.parquet"      # never written
+
+# Yahoo serves ~5 annual periods per Indian filer, and only three of those
+# have broad coverage once a prior year is required for the YoY deltas
+# (FY2024/25/26, ~90 companies each). The screen therefore starts once
+# FY2024 results were filed. Buckets exist so the table can show a decile
+# column, but no return series is computed — see IN_BACKTESTABLE.
+IN_SCREEN_START = "2024-05-31"
+IN_SCREEN_END = "2026-12-31"
+IN_N_BUCKETS = 5
+
+# ---------------------------------------------------------------------------
+# Modeling
+# ---------------------------------------------------------------------------
 # A cross-section is only ranked if it can fill every bucket this deeply.
 # Without it, a thin early cross-section still forms buckets — the KOSPI
 # panel averages ~29 scoreable names in 2017, which across quintiles is ~6
 # per bucket, so a "bucket return" there is a handful of stocks'
 # idiosyncratic noise rather than a cross-sectional signal. Stated as a
 # uniform rule (not a hand-picked start date) so it applies identically to
-# both universes and cannot be tuned to flatter a result.
+# every universe and cannot be tuned to flatter a result.
 MIN_NAMES_PER_BUCKET = 5
 
 MIN_SECTOR_SIZE = 5           # below this, z-score vs whole universe instead

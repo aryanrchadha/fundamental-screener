@@ -154,6 +154,49 @@ def bucket_return_series(panel: pd.DataFrame, n_buckets: int = config.N_DECILES)
 decile_return_series = bucket_return_series  # back-compat alias
 
 
+def run_screen(universe: Universe | str = "india", db_path=None) -> pd.DataFrame:
+    """Score a universe cross-sectionally WITHOUT computing a return series.
+
+    For markets whose data cannot support inference (`backtestable=False`).
+    India's source yields ~3 usable annual cross-sections, which is enough
+    to rank companies and nowhere near enough for Newey-West/Deflated-Sharpe
+    statistics — so this writes the scores panel and stops, rather than
+    producing bucket returns and a validation table that would look like
+    evidence.
+
+    The composite here is the documented EQUAL-WEIGHT prior, not a LASSO
+    fit: fitting three coefficients on ~3 independent fundamental
+    cross-sections would be fitting noise, and the resulting weights would
+    carry a precision the data does not have.
+    """
+    if isinstance(universe, str):
+        universe = get_universe(universe)
+    db_path = db_path or universe.db_path
+
+    tickers = universe.tickers()
+    sectors = universe.sectors()
+    prices = get_monthly_prices(
+        tickers, start=universe.start, end=universe.end,
+        cache_path=universe.prices_cache,
+        symbol_suffix=universe.price_symbol_suffix,
+    )
+    tickers = [t for t in tickers if t in prices.columns and prices[t].notna().any()]
+    dates = pd.date_range(universe.start, universe.end, freq=config.REBALANCE_FREQ)
+    dates = dates[dates <= prices.index.max()]
+    log.info("%s screen: %d tickers, %d dates, %s", universe.name, len(tickers), len(dates),
+             universe.currency)
+
+    panel = build_scores_panel(dates, tickers, sectors, prices, membership=None, db_path=db_path)
+    feats = ["f_score_z", "z_score_z", "o_score_z"]
+    panel["composite_score"] = panel[feats].mean(axis=1).where(panel[feats].notna().all(axis=1))
+    panel["decile"] = panel.groupby(level="as_of_date")["composite_score"].transform(
+        lambda s: form_buckets(s, universe.n_buckets)
+    )
+    panel.reset_index().to_parquet(universe.panel_path)
+    log.info("Saved screen panel (%d rows) to %s", len(panel), universe.panel_path)
+    return panel
+
+
 def run_pipeline(universe: Universe | str = "sp500", db_path=None) -> dict[str, pd.DataFrame]:
     """Run the full scoring + bucket backtest for one universe.
 
@@ -204,7 +247,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Run the bucket backtest for one universe")
-    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi", "india"])
     p.add_argument("--survivorship", action="store_true",
                    help="restrict each rebalance to names actually listed then; "
                         "writes to *_pit outputs so both runs can be compared")
@@ -213,6 +256,22 @@ def main() -> None:
     uni = get_universe(args.universe)
     if args.survivorship:
         uni = uni.corrected()
+
+    # Screener-only universes stop at the panel: no return series, and
+    # therefore no spread to summarise. See run_screen's docstring.
+    if not uni.backtestable:
+        panel = run_screen(uni)
+        latest = panel.index.get_level_values("as_of_date").max()
+        xsec = panel.loc[latest].dropna(subset=["composite_score"])
+        print(f"\n=== {uni.name} screen ({uni.currency}) ===")
+        print(f"As of {latest:%Y-%m-%d}: {len(xsec)} of {panel.loc[latest].shape[0]} names scored")
+        print(f"Panel: {len(panel):,} rows across "
+              f"{panel.index.get_level_values('as_of_date').nunique()} dates")
+        print(f"\nNo backtest is run for {uni.name}: its source supports too few "
+              f"independent\ncross-sections for return-series inference. "
+              f"View with `python -m dashboard.app --universe {uni.name}`.")
+        return
+
     out = run_pipeline(uni)
     uni = out["universe"]
     dec = out["decile_returns"].dropna(subset=["spread"])
