@@ -140,19 +140,53 @@ FS_DIV_PRIORITY = ["CFS", "OFS"]  # Consolidated preferred, Individual/standalon
 # field is internally consistent rather than taken on faith.
 #
 # ROW SELECTION is the subtle part. `se` (구분) labels the share class, and
-# real filings do NOT use one consistent spelling for common stock. Every
-# variant observed across the sweep:
+# real filings use TWO different naming conventions that changed over time.
+#
+# By share type (dominant from ~2020 on):
 #     '보통주'                     (Samsung, Celltrion, most filers)
 #     '의결권 있는 보통주'          (voting common)
 #     '의결권 있는\n보통주'         (Shinhan — embedded newline)
 #     '의결권 있는 주식\n(보통주)'   (LG Electronics — parenthesised)
-# A substring test for '보통주' catches all four. It correctly does NOT
-# match the preferred-class labels ('우선주', '의결권 없는 우선주',
-# '의결권 없는 주식\n(우선주)') — '보통주' and '우선주' share only their
-# final character — nor Amorepacific's '종류주' (a separate class share).
-COMMON_STOCK_LABEL = "보통주"
+# By voting right, with NO 보통주 substring anywhere (dominant 2015-2019,
+# and the reason an earlier 보통주-only matcher silently produced no share
+# count at all for those years):
+#     '의결권 있는 주식'            (KB FY2017, POSCO FY2018, LG Elec FY2015)
+#     '의결권 없는 주식'            — its non-voting counterpart
+#
+# So a row is common if it names 보통주 OR grants voting rights. The two
+# tests are complementary and both are needed. '의결권있는' ("with voting
+# rights") does not match '의결권없는' ("without") — 있는/없는 differ — so
+# preferred is still correctly excluded, as are '우선주' variants and
+# Amorepacific's '종류주' class share.
+#
+# Matching is done GRAMMATICALLY rather than by enumerating spellings,
+# because real filings vary in two independent ways at once and an
+# enumeration kept springing leaks across the 120-name x 9-year ingest:
+#   * separator — newline ('의결권\n있는 주식', Hanwha Aerospace FY2017),
+#     one space, TWO spaces ('의결권  있는 주식'), or none ('의결권있는주식')
+#   * particle  — the nominative 이 is sometimes inserted, giving
+#     '의결권이있는주식' ("shares that HAVE voting rights")
+# So: strip all whitespace, then treat a row as common if it names 보통주,
+# or if it mentions 의결권 (voting right) together with 있는 (has). The
+# non-voting counterpart uses 없는 (has not), which does not contain 있는,
+# so preferred is excluded by construction rather than by a denylist —
+# as are '우선주' variants and Amorepacific's '종류주' class share.
+COMMON_STOCK_TYPE_LABEL = "보통주"
+VOTING_RIGHT_LABEL = "의결권"
+HAS_LABEL = "있는"
 SHARES_TOTAL_LABEL = "합계"
 SHARES_REMARKS_LABEL = "비고"
+
+
+def _normalize_share_label(raw) -> str:
+    """Drop every whitespace character so label spelling variants collapse."""
+    return "".join(str(raw).split())
+
+
+def _is_common_share_label(raw) -> bool:
+    """True if this `se` value names the common/voting share class."""
+    s = _normalize_share_label(raw)
+    return COMMON_STOCK_TYPE_LABEL in s or (VOTING_RIGHT_LABEL in s and HAS_LABEL in s)
 
 # canonical tag -> candidate account_id spellings, prefix-stripped and
 # lowercased before comparison (see _normalize_account_id).
@@ -428,7 +462,7 @@ def get_financial_statement(
 
 def extract_company_facts(
     api_key: str, ticker: str, corp_code: str, bsns_year: str,
-    cache_path: str = "data/http_cache",
+    cache_path: str = "data/http_cache", filings: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Pull one company-year's canonical facts, gated by the real filing
     date resolved from search_annual_filings. Returns rows in the same
@@ -448,9 +482,11 @@ def extract_company_facts(
     # DART serves each bsns_year's statements from the latest document
     # containing them, which for a restated/re-reported year is a filing
     # up to two years after fiscal year end.
-    year_start = f"{int(bsns_year) + 1}0101"
-    year_end = f"{int(bsns_year) + 2}1231"
-    filings = search_annual_filings(api_key, corp_code, year_start, year_end, cache_path=cache_path)
+    if filings is None:
+        year_start = f"{int(bsns_year) + 1}0101"
+        year_end = f"{int(bsns_year) + 2}1231"
+        filings = search_annual_filings(api_key, corp_code, year_start, year_end,
+                                        cache_path=cache_path)
     # An empty index is no longer fatal: facts_from_dataframes can fall
     # back to the rcept_no date prefix (see _filed_date_for's comment).
     return facts_from_dataframes(ticker, corp_code, bsns_year, fin, filings, shares=shares)
@@ -579,17 +615,36 @@ def facts_from_dataframes(
     # a balance-sheet line, so start_date stays None and query.py's
     # instant-tag filter accepts it on the shared 'DART-ANNUAL' form marker.
     if shares is not None and not shares.empty:
-        common = shares[
-            shares["se"].astype(str).str.contains(COMMON_STOCK_LABEL, na=False)
-        ]
+        se = shares["se"].map(_normalize_share_label)
+        is_common = shares["se"].map(_is_common_share_label)
+        common = shares[is_common]
         if common.empty:
-            log.warning(
-                "%s FY%s: no share class matching %r in stockTotqySttus "
-                "(labels present: %s) — shares outstanding excluded",
-                ticker, bsns_year, COMMON_STOCK_LABEL,
-                sorted({str(s).replace(chr(10), " ") for s in shares["se"]}),
+            # Last resort: a filing that lists ONLY a 합계 total, with every
+            # other class row empty, has exactly one share class — so the
+            # total IS the common count and can be used unambiguously. If
+            # any other class carries a value the total bundles preferred
+            # (Hyundai Motor: 202.3M common vs 261.3M total) and using it
+            # would be a silent 23% error, so that case is excluded instead.
+            other = shares[~is_common & ~se.isin([SHARES_TOTAL_LABEL, SHARES_REMARKS_LABEL])]
+            other_has_values = any(
+                _parse_dart_number(v) is not None for v in other.get("distb_stock_co", [])
             )
-        else:
+            total_rows = shares[se == SHARES_TOTAL_LABEL]
+            total_val = next(
+                (v for v in (_parse_dart_number(x) for x in total_rows.get("distb_stock_co", []))
+                 if v is not None), None,
+            )
+            if total_val is not None and not other_has_values:
+                log.info("%s FY%s: no named common class, but the 합계 total is the only "
+                         "populated class — using it as common shares", ticker, bsns_year)
+                common = total_rows
+            else:
+                log.warning(
+                    "%s FY%s: no common/voting share class in stockTotqySttus "
+                    "(labels present: %s) — shares outstanding excluded",
+                    ticker, bsns_year, sorted(set(se)),
+                )
+        if not common.empty:
             if len(common) > 1:
                 # Never observed in the verified 21-name sweep. If a filer
                 # ever reports multiple common classes, take the largest
@@ -598,7 +653,7 @@ def facts_from_dataframes(
                 log.warning(
                     "%s FY%s: %d share classes match %r (%s) — using the "
                     "largest; re-verify this filer's mapping",
-                    ticker, bsns_year, len(common), COMMON_STOCK_LABEL,
+                    ticker, bsns_year, len(common), "common/voting share class",
                     [str(s).replace(chr(10), " ") for s in common["se"]],
                 )
             best, best_val = None, None
@@ -642,44 +697,97 @@ def facts_from_dataframes(
     return out
 
 
+def _fetch_company_all_years(
+    api_key: str, ticker: str, corp_code: str, years: list[str], cache_path: str
+) -> list[tuple[str, pd.DataFrame]]:
+    """Fetch every requested year for ONE company, sharing a single filing
+    index across them.
+
+    The filing index is the reason this is company-scoped rather than
+    company-year-scoped: search_annual_filings is keyed by an explicit date
+    window, so a per-year window (year+1..year+2) produced a distinct URL
+    for every year and never reused the HTTP cache. Fetching one window
+    spanning all requested years cuts roughly a quarter of the calls and,
+    because the index is small, costs nothing extra per year.
+    """
+    span_start = f"{min(int(y) for y in years) + 1}0101"
+    span_end = f"{max(int(y) for y in years) + 2}1231"
+    filings = search_annual_filings(api_key, corp_code, span_start, span_end,
+                                    cache_path=cache_path)
+    out = []
+    for year in years:
+        try:
+            facts = extract_company_facts(api_key, ticker, corp_code, year,
+                                          cache_path=cache_path, filings=filings)
+        except Exception as exc:  # one bad company-year must not kill the run
+            log.warning("%s (%s) FY%s: fetch failed (%s) — skipped", ticker, corp_code, year, exc)
+            continue
+        out.append((year, facts))
+    return out
+
+
 def run_dart_ingest(
     tickers_corp_codes: dict[str, str],
     years: list[str],
     db_path: str,
     cache_path: str = "data/http_cache",
+    max_workers: int = 8,
 ) -> None:
     """Ingest DART data for a ticker->corp_code crosswalk into the shared
-    PIT database. Requires DART_API_KEY. Mapping verified against Samsung
-    Electronics' real filings — see module docstring for exactly what was
-    and wasn't checked before extending to other companies."""
+    PIT database. Requires DART_API_KEY. Mapping verified against real
+    filings — see module docstring for what was and wasn't checked.
+
+    Network fetches run concurrently across companies (DART publishes no
+    per-second rate limit, unlike SEC EDGAR, so the polite-throttle the
+    EDGAR client needs does not apply here; the cap stays modest anyway).
+    DuckDB writes stay on the calling thread — a DuckDB connection is not
+    safe for concurrent writers — so the pattern is parallel fetch, serial
+    insert.
+    """
     api_key = require_api_key()
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from pit_fundamentals.schema import connect, init_db
 
     con = connect(db_path)
     init_db(con)
     total = 0
-    for year in years:
-        for ticker, corp_code in tickers_corp_codes.items():
-            facts = extract_company_facts(api_key, ticker, corp_code, year, cache_path=cache_path)
-            if facts.empty:
-                log.warning("%s (%s): no facts extracted for %s", ticker, corp_code, year)
+    done = 0
+    n_jobs = len(tickers_corp_codes)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_fetch_company_all_years, api_key, t, c, years, cache_path): (t, c)
+            for t, c in tickers_corp_codes.items()
+        }
+        for fut in as_completed(futures):
+            ticker, corp_code = futures[fut]
+            done += 1
+            try:
+                results = fut.result()
+            except Exception as exc:
+                log.warning("%s (%s): company fetch failed (%s) — skipped", ticker, corp_code, exc)
                 continue
-            con.execute(
-                "DELETE FROM pit_facts WHERE cik = ? AND fy = ? AND taxonomy = 'dart-kr'",
-                [corp_code, int(year)],
-            )
-            con.register("_staging_kr", facts)
-            con.execute(
-                """INSERT INTO pit_facts
-                   (cik, ticker, tag, fiscal_period_end, start_date, filed_date,
-                    value, unit, form, fy, fp, is_restatement, taxonomy)
-                   SELECT cik, ticker, tag, fiscal_period_end, start_date, filed_date,
-                          value, unit, form, fy, fp, is_restatement, taxonomy
-                   FROM _staging_kr"""
-            )
-            con.unregister("_staging_kr")
-            total += len(facts)
-            log.info("%s (%s): %d facts loaded for %s", ticker, corp_code, len(facts), year)
+            for year, facts in results:
+                if facts.empty:
+                    log.info("%s (%s): no facts for FY%s", ticker, corp_code, year)
+                    continue
+                con.execute(
+                    "DELETE FROM pit_facts WHERE cik = ? AND fy = ? AND taxonomy = 'dart-kr'",
+                    [corp_code, int(year)],
+                )
+                con.register("_staging_kr", facts)
+                con.execute(
+                    """INSERT INTO pit_facts
+                       (cik, ticker, tag, fiscal_period_end, start_date, filed_date,
+                        value, unit, form, fy, fp, is_restatement, taxonomy)
+                       SELECT cik, ticker, tag, fiscal_period_end, start_date, filed_date,
+                              value, unit, form, fy, fp, is_restatement, taxonomy
+                       FROM _staging_kr"""
+                )
+                con.unregister("_staging_kr")
+                total += len(facts)
+            log.info("[%d/%d] %s (%s): %d fact rows across %d years",
+                     done, n_jobs, ticker, corp_code, sum(len(f) for _, f in results), len(results))
     con.close()
     log.info("DART ingest complete: %d fact rows across %d tickers, %d years",
              total, len(tickers_corp_codes), len(years))

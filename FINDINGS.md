@@ -402,6 +402,77 @@ the many US service companies whose `GrossProfit` tag is likewise absent
 gross-profit proxy from operating expense would be fabrication, so the
 company-year is dropped and logged instead.
 
+## The Korean backtest: a second market, and what it says about the first
+
+Wiring KRX prices in turned Korea from a scoring demonstration into a real
+backtest. Universe: the **120 most liquid KOSPI names**, selected by a
+stated rule (DART's own 784-company KOSPI filer list, ranked by median
+daily traded value from 2014-2025 Yahoo history) rather than a
+hand-assembled list. Fundamentals FY2015–2023, 105 monthly rebalances
+(2017-03 → 2025-11), median 93 fully-scored names per month, **quintiles**
+rather than deciles because 120 names split ten ways leaves ~9 per bucket.
+
+| Strategy | Ann. return (D5−D1) | Ann. Sharpe | NW t-stat | Skew | Kurtosis | DSR | Survives 95%? |
+|---|---|---|---|---|---|---|---|
+| Piotroski F-Score | **+5.9%** | 0.38 | 1.02 | −0.01 | 2.84 | 0.519 | **No** |
+| Altman Z-Score | −3.2% | −0.17 | −0.45 | 1.03 | 5.62 | 0.059 | **No** |
+| Ohlson O-Score | −2.3% | −0.16 | −0.43 | −0.79 | 4.00 | 0.062 | **No** |
+| Composite (LASSO) | +2.4% | 0.11 | 0.33 | 1.16 | 7.61 | 0.238 | **No** |
+
+**Nothing survives in Korea either — but the failure has a different
+shape, which is the interesting part.** In the US every one of the four
+strategies had a *negative* point estimate, and the O-Score's was
+significantly negative (t = −3.0): distress ranking was actively
+contrarian. In Korea the Piotroski F-Score is *positive* (+5.9%/yr, the
+best Sharpe of any score in either market) and the quintile returns are
+close to monotone across the top four buckets — D5 19.6% > D4 15.7% >
+D3 13.7% > D2 11.2% annualised. That is the gradient the literature
+predicts.
+
+It still does not clear the bar, for two honest reasons. First, D1 — the
+*worst*-ranked quintile — returned 17.2%/yr, second only to D5, so the
+monotone top does not translate into a long-short spread; the bottom
+bucket did nearly as well as the top. Second, a Newey-West t-stat of 1.02
+over 105 months is simply not significant, and the Deflated Sharpe Ratio
+(0.519) sits far below the 0.95 bar once the four-hypothesis correction
+and the return distribution's fat tails are applied. The composite's
+kurtosis of 7.6 is the highest of any series in this project, and DSR
+penalises it accordingly. The walk-forward LASSO again shrank every
+coefficient to zero, so the composite is the equal-weight prior throughout.
+
+The defensible reading is *"not yet ruled out in Korea, ruled out in the
+US"* — a weaker claim than "the effect lives in emerging markets", and one
+that would need a wider universe and a longer sample to sharpen.
+
+### Currency: handled by not converting
+
+Fundamentals and prices are both in KRW, so every ratio the scores compute
+(market cap / total liabilities, sales / assets) is unit-free, and the
+long-short spread is a local-currency return in which an FX translation
+would multiply both legs by the same factor and cancel. No conversion is
+applied and none is needed. The corollary is that the Korean and US
+**levels above are not directly comparable** without conversion — only
+their t-stats and Sharpes, which are unit-free, are.
+
+### Limitations specific to this backtest
+
+1. **Survivorship bias, again.** The 120 names are today's liquid KOSPI
+   ranked over the full sample and applied backwards; delisted and
+   liquidity-losing companies are absent. There is no free historical
+   KOSPI-200 constituent table to correct with, so this is the same known
+   bias as the S&P 500 default, not a smaller one.
+2. **Liquidity selection is itself a filter.** Ranking by traded value
+   selects large, heavily-covered names — precisely where Piotroski's
+   original small-cap effect is least expected to appear.
+3. **The sample is short.** 105 months with a ~93-name cross-section is
+   thin next to the US run's 167 months, and the first usable date is
+   dictated by DART's structured data beginning at FY2015.
+4. **Sector-neutralisation uses KSIC divisions, not GICS.** GICS is
+   licensed; KSIC is Korea's official statistical classification and comes
+   straight from DART. It is a defensible peer grouping but not the same
+   grouping the US path uses, so cross-market comparison of the
+   *sector-neutral* step is approximate.
+
 ## Bottom line
 
 As a *screener* the artifact works and the infrastructure (the PIT database
@@ -409,3 +480,14 @@ especially) is reusable. As a *strategy*, the composite's edge does not
 exist in this sample: DSR = 0.09, far below the 0.95 bar, and the honest
 conclusion is that classical statement-score investing in large-cap US
 equities has not paid since at least 2012.
+
+The Korean extension does not overturn that, and it is worth being precise
+about what it adds. Across **two independent markets, two regulators, two
+accounting taxonomies, and 272 combined monthly observations, not one of
+the eight strategy-market pairs survives a Deflated Sharpe correction.**
+The one bright spot — Korea's Piotroski F-Score at +5.9%/yr with a
+near-monotone quintile gradient — has a t-stat of 1.02 and a bottom bucket
+that returned nearly as much as the top. Two markets failing the same way
+is meaningfully stronger evidence than one, and the honest summary is that
+these scores are a defensible *screen* and a genuinely reusable piece of
+infrastructure, but not, on this evidence, a strategy.

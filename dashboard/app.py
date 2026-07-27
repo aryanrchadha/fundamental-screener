@@ -16,13 +16,15 @@ import plotly.graph_objects as go
 from dash import Dash, dash_table, dcc, html
 
 import config
+from screener.universes import get_universe
 
 
-def load_data():
-    panel = pd.read_parquet(config.SCORES_PANEL_PATH)
-    dec = pd.read_parquet(config.DECILE_RETURNS_PATH)
-    summary = pd.read_csv(config.VALIDATION_SUMMARY_PATH, index_col=0)
-    roll = pd.read_parquet(config.ROLLING_SPREAD_PATH)
+def load_data(universe="sp500"):
+    uni = get_universe(universe) if isinstance(universe, str) else universe
+    panel = pd.read_parquet(uni.panel_path)
+    dec = pd.read_parquet(uni.bucket_returns_path)
+    summary = pd.read_csv(uni.validation_path, index_col=0)
+    roll = pd.read_parquet(uni.rolling_path)
     return panel, dec, summary, roll
 
 
@@ -43,14 +45,15 @@ def fig_sector_heatmap(panel: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def fig_decile_cumret(dec: pd.DataFrame) -> go.Figure:
+def fig_decile_cumret(dec: pd.DataFrame, n_buckets: int = config.N_DECILES) -> go.Figure:
     fig = go.Figure()
+    spread_label = f"D{n_buckets}-D1 spread"
     for col in [c for c in dec.columns if c.startswith("D")] + ["spread"]:
         cum = (1 + dec[col].fillna(0)).cumprod() - 1
         style = dict(width=3, color="black") if col == "spread" else dict(width=1)
-        fig.add_trace(go.Scatter(x=dec.index, y=cum, name="D10-D1 spread" if col == "spread" else col,
-                                 line=style))
-    fig.update_layout(title="Cumulative decile returns (equal weight, monthly rebalance)",
+        fig.add_trace(go.Scatter(x=dec.index, y=cum,
+                                 name=spread_label if col == "spread" else col, line=style))
+    fig.update_layout(title=f"Cumulative bucket returns ({n_buckets} buckets, equal weight, monthly)",
                       yaxis_tickformat=".0%", height=550)
     return fig
 
@@ -81,11 +84,12 @@ def fig_rolling(roll: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def build_app() -> Dash:
-    panel, dec, summary, roll = load_data()
+def build_app(universe="sp500") -> Dash:
+    uni = get_universe(universe) if isinstance(universe, str) else universe
+    panel, dec, summary, roll = load_data(uni)
     xsec = latest_cross_section(panel)
 
-    app = Dash(__name__, title="Composite Fundamental Screener")
+    app = Dash(__name__, title=f"Composite Fundamental Screener — {uni.name}")
     table = dash_table.DataTable(
         data=xsec.to_dict("records"),
         columns=[{"name": c, "id": c} for c in xsec.columns],
@@ -99,7 +103,7 @@ def build_app() -> Dash:
     app.layout = html.Div(
         style={"maxWidth": "1200px", "margin": "auto", "fontFamily": "sans-serif"},
         children=[
-            html.H2("Composite Fundamental Screener"),
+            html.H2(f"Composite Fundamental Screener — {uni.name} ({uni.currency})"),
             dcc.Tabs([
                 dcc.Tab(label="Screener table", children=[
                     html.P(f"Latest cross-section ({panel['as_of_date'].max():%Y-%m-%d}). "
@@ -107,11 +111,11 @@ def build_app() -> Dash:
                     table,
                 ]),
                 dcc.Tab(label="Sector heatmap", children=[dcc.Graph(figure=fig_sector_heatmap(panel))]),
-                dcc.Tab(label="Decile returns", children=[dcc.Graph(figure=fig_decile_cumret(dec))]),
+                dcc.Tab(label="Bucket returns", children=[dcc.Graph(figure=fig_decile_cumret(dec, uni.n_buckets))]),
                 dcc.Tab(label="F-Score scatter", children=[dcc.Graph(figure=fig_f_scatter(panel))]),
                 dcc.Tab(label="Rolling spread", children=[dcc.Graph(figure=fig_rolling(roll))]),
                 dcc.Tab(label="Validation", children=[
-                    html.H4("Newey-West / Deflated Sharpe summary (D10 − D1)"),
+                    html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),
                     summary_txt,
                     html.P("survives_95 = Deflated Sharpe Ratio > 0.95 after correcting for "
                            "4 related trials (F, Z, O, composite) with empirical skew/kurtosis."),
@@ -123,4 +127,10 @@ def build_app() -> Dash:
 
 
 if __name__ == "__main__":
-    build_app().run(debug=False, port=8050)
+    import argparse
+
+    p = argparse.ArgumentParser(description="Composite fundamental screener dashboard")
+    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--port", type=int, default=8050)
+    a = p.parse_args()
+    build_app(a.universe).run(debug=False, port=a.port)

@@ -31,7 +31,7 @@ from scipy import stats as sps
 
 import config
 from screener import normalize
-from screener.backtest import decile_return_series, form_deciles
+from screener.backtest import bucket_return_series, form_buckets
 
 log = logging.getLogger(__name__)
 
@@ -105,14 +105,18 @@ def deflated_sharpe_ratio(
     }
 
 
-def single_score_spreads(panel: pd.DataFrame) -> dict[str, pd.Series]:
-    """D10-D1 spread series for each single sector-neutral score, built the
-    same way as the composite's deciles (same universe, same months)."""
+def single_score_spreads(panel: pd.DataFrame,
+                         n_buckets: int = config.N_DECILES) -> dict[str, pd.Series]:
+    """Top-minus-bottom bucket spread for each single sector-neutral score,
+    built exactly like the composite's (same universe, months, bucket count)
+    so the four strategies in the summary table are directly comparable."""
     out = {}
     for col, label in [("f_score_z", "F-Score"), ("z_score_z", "Z-Score"), ("o_score_z", "O-Score")]:
         p = panel.copy()
-        p["decile"] = p.groupby(level="as_of_date")[col].transform(form_deciles)
-        rets = decile_return_series(p)
+        p["decile"] = p.groupby(level="as_of_date")[col].transform(
+            lambda s: form_buckets(s, n_buckets)
+        )
+        rets = bucket_return_series(p, n_buckets)
         if "spread" in rets:
             out[label] = rets["spread"]
     return out
@@ -127,9 +131,10 @@ def rolling_spread(spread: pd.Series, window: int = config.ROLLING_WINDOW_MONTHS
     return pd.DataFrame({"ann_spread": mu, "lo": mu - 1.96 * se, "hi": mu + 1.96 * se})
 
 
-def build_summary(panel: pd.DataFrame, decile_rets: pd.DataFrame) -> pd.DataFrame:
+def build_summary(panel: pd.DataFrame, decile_rets: pd.DataFrame,
+                  n_buckets: int = config.N_DECILES) -> pd.DataFrame:
     """One row per strategy (F, Z, O, composite): NW t-stat, Sharpe, DSR."""
-    series = single_score_spreads(panel)
+    series = single_score_spreads(panel, n_buckets=n_buckets)
     series["Composite (LASSO)"] = decile_rets["spread"]
     rows = []
     for name, s in series.items():
@@ -158,17 +163,27 @@ def build_summary(panel: pd.DataFrame, decile_rets: pd.DataFrame) -> pd.DataFram
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    panel = pd.read_parquet(config.SCORES_PANEL_PATH).set_index(["as_of_date", "ticker"])
-    dec = pd.read_parquet(config.DECILE_RETURNS_PATH)
+    import argparse
 
-    summary = build_summary(panel, dec)
-    summary.to_csv(config.VALIDATION_SUMMARY_PATH)
+    from screener.universes import get_universe
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    p = argparse.ArgumentParser(description="Newey-West + Deflated Sharpe validation")
+    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    args = p.parse_args()
+    uni = get_universe(args.universe)
+
+    panel = pd.read_parquet(uni.panel_path).set_index(["as_of_date", "ticker"])
+    dec = pd.read_parquet(uni.bucket_returns_path)
+
+    summary = build_summary(panel, dec, n_buckets=uni.n_buckets)
+    summary.to_csv(uni.validation_path)
     roll = rolling_spread(dec["spread"].dropna())
-    roll.to_parquet(config.ROLLING_SPREAD_PATH)
+    roll.to_parquet(uni.rolling_path)
 
     pd.set_option("display.width", 140)
-    print("\n=== Validation summary (D10 - D1 monthly spreads) ===\n")
+    print(f"\n=== Validation summary — {uni.name} "
+          f"(D{uni.n_buckets} - D1 monthly spreads, {uni.currency}) ===\n")
     print(summary.round(3).to_string())
     comp = summary.loc[["Composite (LASSO)"]] if "Composite (LASSO)" in summary.index else summary
     verdict = bool(comp["survives_95"].iloc[0]) if len(comp) else False

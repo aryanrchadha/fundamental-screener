@@ -190,7 +190,55 @@ companies presenting a single `ifrs-full_OperatingExpense`), so Piotroski's
 service companies whose `GrossProfit` tag is likewise absent. Only the
 common share class is mapped, so companies with large preferred floats get
 a common-only market cap (the same limitation the US path already carries).
-Filers outside these 21 may use tag spellings, share-class labels, or
+
+### The Korean backtest
+
+With KRX prices wired in, the KOSPI universe runs the same pipeline
+end-to-end:
+
+```bash
+python -m screener.backtest  --universe kospi
+python -m screener.validation --universe kospi
+python -m dashboard.app       --universe kospi
+```
+
+Universe: **120 most liquid KOSPI names**, FY2015–2023 fundamentals,
+105 monthly rebalances (2017-03 → 2025-11), median 93 fully-scored names
+per month. Buckets are **quintiles**, not deciles — 120 names split ten
+ways would leave ~9 per bucket. Both the bucket count and a uniform
+`MIN_NAMES_PER_BUCKET` rule live in config rather than being hand-tuned
+per market.
+
+| Strategy | Ann. return (D5−D1) | Ann. Sharpe | NW t-stat | DSR | Survives 95%? |
+|---|---|---|---|---|---|
+| Piotroski F-Score | **+5.9%** | 0.38 | 1.02 | 0.519 | No |
+| Altman Z-Score | −3.2% | −0.17 | −0.45 | 0.059 | No |
+| Ohlson O-Score | −2.3% | −0.16 | −0.43 | 0.062 | No |
+| Composite (LASSO) | +2.4% | 0.11 | 0.33 | 0.238 | No |
+
+**Nothing survives in Korea either** — but the result is not a carbon copy
+of the US. The Piotroski F-Score is the one strategy with a genuinely
+positive point estimate (+5.9%/yr, the best Sharpe of any score in either
+market), and Korea's quintile returns are close to monotone at the top
+(D5 19.6% > D4 15.7% > D3 13.7% > D2 11.2% annualised) — with the notable
+exception of D1 at 17.2%, so the worst-ranked names also did well and the
+long-short spread nets out near zero. A t-stat of 1.02 is nowhere near
+significance, and the walk-forward LASSO again shrank every coefficient to
+zero, so the composite reverts to the equal-weight prior. Treat the
+positive F-Score number as "not yet ruled out", not as an edge.
+
+Currency is handled by *not* converting: fundamentals and prices are both
+in KRW, so every ratio the scores compute is unit-free, and the long-short
+spread is a local-currency return in which an FX translation would multiply
+both legs by the same factor and cancel. Comparing the *levels* above
+against the US table would not be valid without conversion.
+
+**Survivorship bias is real here too** — the 120 names are today's liquid
+KOSPI, ranked over the full sample and applied backwards, so companies that
+delisted or lost liquidity are absent. There is no free historical KOSPI-200
+constituent table to correct with.
+
+Filers outside these 120 may use tag spellings, share-class labels, or
 statement layouts the sweep didn't encounter.
 
 ## Setup
@@ -213,12 +261,25 @@ pipeline runs fully without it.
 ## Run
 
 ```bash
+# US (S&P 500, deciles)
 python -m pit_fundamentals.ingest --universe sp500   # ~30 min first run (rate-limited, resumable)
-python -m screener.backtest                          # scores, composite, deciles -> data/*.parquet
+python -m screener.backtest                          # scores, composite, buckets -> data/*.parquet
 python -m screener.validation                        # NW t-stats + DSR summary -> console + CSV
 python -m dashboard.app                              # http://localhost:8050
+
+# South Korea (KOSPI 120, quintiles) — needs DART_API_KEY
+python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2015 2016 2017 2018 2019 2020 2021 2022 2023
+python -m screener.backtest    --universe kospi
+python -m screener.validation  --universe kospi
+python -m dashboard.app        --universe kospi
+
 pytest                                               # full test suite
 ```
+
+Every market-specific detail — ticker source, Yahoo exchange suffix, bucket
+count, output paths, currency — is a field on a `Universe`
+(`screener/universes.py`), so adding a market means adding a Universe
+rather than editing the backtest.
 
 `--limit 50` on the ingest gives a small fast universe (what the Colab
 notebook uses). Re-running is cheap: all HTTP responses are disk-cached
@@ -251,7 +312,9 @@ pit_fundamentals/   # standalone PIT database package (own pyproject.toml)
   ingest.py            # CLI: --taxonomy {us-gaap, cvm-br, dart-kr}
 screener/           # universe, scores, normalize, composite, backtest, validation
   universe_br.py       # curated B3 blue-chip ticker->CNPJ crosswalk
-  universe_kr.py       # KOSPI crosswalk (21 names, registry-resolved + live-verified)
+  universe_kr.py       # KOSPI crosswalk loader (120 names)
+  kospi_universe.csv   # the universe itself, tracked so a clean clone reproduces it
+  universes.py         # Universe defs: suffix, bucket count, paths, currency
 dashboard/          # Plotly Dash app (6 views)
 tests/              # score formulas, normalization, CV-leakage guard, PIT-universe exclusion
 notebooks/          # colab_quickstart.ipynb — full pipeline end to end

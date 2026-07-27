@@ -1,74 +1,91 @@
-"""KOSPI blue-chip crosswalk: ticker -> DART corp_code, sector.
+"""KOSPI universe: ticker -> DART corp_code, industry group.
 
-Every corp_code below was resolved from DART's OWN corpCode registry
-(pit_fundamentals.dart_kr_client.download_corp_codes — 118,508 entities,
-3,977 listed) by matching the 6-digit KRX stock code, with the registry's
-Korean and English company names confirming each match. None are from
-memory or guesswork. Every non-financial entry was then LIVE-VERIFIED by
-pulling its real FY2022-2023 fnlttSinglAcntAll statements and asserting
-the accounting identity Assets = Liabilities + StockholdersEquity holds
-exactly (37/40 company-years pass; see the FY2022-financials note below
-for the other three).
+The universe lives in `screener/kospi_universe.csv` (tracked in git, not in
+gitignored `data/`, so a clean clone reproduces the exact backtest universe
+without needing an API key). It was built entirely from primary sources —
+no ticker list was typed from memory:
 
-Two facts about financial institutions (KB, Shinhan, Samsung Life),
-learned from the live sweep rather than assumed:
+  1. DART `list.json` with corp_cls='Y' over the FY2023 annual-report
+     season returned the 784 KOSPI companies that actually file annual
+     reports.
+  2. Those were ranked by median daily traded value (close x volume) from
+     Yahoo `.KS` daily history, 2014-2025; 726 had >=1500 trading days.
+  3. The top 120 by liquidity form the universe. Liquidity — not index
+     membership — is the selection rule because there is no free
+     historical KOSPI-200 constituent table, and a liquidity screen is at
+     least a stated, reproducible rule rather than an implicit one.
+  4. Each company's `induty_code` came from DART `company.json`.
 
-  * DART's fnlttSinglAcntAll returns status 013 ("no data") for all three
-    in FY2022, consolidated and standalone alike — the endpoint's
-    documented historical exclusion of financial institutions; their
-    coverage begins with FY2023.
-  * From FY2023 onward they DO return data, but as liquidity-order IFRS
-    balance sheets with no current/non-current split — no
-    AssetsCurrent/LiabilitiesCurrent, so Ohlson O-Score (which needs
-    working capital and CL/CA) excludes them automatically via missing
-    tags. Same principled financial-institution exclusion as the US and
-    Brazil pipelines, arrived at through a third distinct mechanism.
+SECTOR GROUPING: `sector` is the 2-digit division of the Korean Standard
+Industrial Classification (KSIC) — Korea's official statistical industry
+classification, taken straight from DART. It is NOT GICS: GICS is licensed
+and unavailable free, and inventing a KSIC->GICS crosswalk would be
+fabricating a mapping. KSIC divisions serve the same purpose here, which
+is a defensible peer group for sector-neutral z-scoring (e.g. KSIC-26 =
+electronic components/computers/communications equipment holds Samsung
+Electronics and SK Hynix together; KSIC-64 = financial services holds the
+banks). Groups thinner than config.MIN_SECTOR_SIZE fall back to
+universe-level z-scoring exactly as in the US path.
 
-They are kept in the crosswalk deliberately: they exercise that exclusion
-path, and their Assets/Liabilities/Equity/NetIncomeLoss/CFO facts are
-still valid PIT data for anything that doesn't need a classified balance
-sheet.
+SURVIVORSHIP BIAS: like the S&P 500 default, this is a CURRENT list applied
+backwards — companies that delisted or lost liquidity before 2024 are
+absent, and the liquidity ranking itself is measured over the full sample.
+The bias is real and is stated in FINDINGS.md rather than papered over.
 
-Sector labels are GICS-style approximations for sector-neutral z-scoring
-(the demo grouping), not licensed GICS assignments.
+The 21 hand-verified blue chips from the earlier build are a subset of this
+list; their corp_codes were each confirmed against real filings, and the
+remaining 99 were resolved by the same registry lookup and are held to the
+same automated acceptance test (Assets = Liabilities + Equity, exactly).
 """
 
 from __future__ import annotations
 
-# ticker (KRX 6-digit stock code) -> corp_code / name / sector.
-KR_BLUE_CHIPS: dict[str, dict[str, str]] = {
-    "005930": {"corp_code": "00126380", "name": "Samsung Electronics", "sector": "Information Technology"},
-    "000660": {"corp_code": "00164779", "name": "SK Hynix", "sector": "Information Technology"},
-    "373220": {"corp_code": "01515323", "name": "LG Energy Solution", "sector": "Industrials"},
-    "005380": {"corp_code": "00164742", "name": "Hyundai Motor", "sector": "Consumer Discretionary"},
-    "005490": {"corp_code": "00155319", "name": "POSCO Holdings", "sector": "Materials"},
-    "035420": {"corp_code": "00266961", "name": "NAVER", "sector": "Communication Services"},
-    "000270": {"corp_code": "00106641", "name": "Kia", "sector": "Consumer Discretionary"},
-    "051910": {"corp_code": "00356361", "name": "LG Chem", "sector": "Materials"},
-    "006400": {"corp_code": "00126362", "name": "Samsung SDI", "sector": "Information Technology"},
-    "035720": {"corp_code": "00258801", "name": "Kakao", "sector": "Communication Services"},
-    "105560": {"corp_code": "00688996", "name": "KB Financial Group", "sector": "Financials"},
-    "055550": {"corp_code": "00382199", "name": "Shinhan Financial Group", "sector": "Financials"},
-    "012330": {"corp_code": "00164788", "name": "Hyundai Mobis", "sector": "Consumer Discretionary"},
-    "068270": {"corp_code": "00413046", "name": "Celltrion", "sector": "Health Care"},
-    "096770": {"corp_code": "00631518", "name": "SK Innovation", "sector": "Energy"},
-    "017670": {"corp_code": "00159023", "name": "SK Telecom", "sector": "Communication Services"},
-    "015760": {"corp_code": "00159193", "name": "KEPCO", "sector": "Utilities"},
-    "032830": {"corp_code": "00126256", "name": "Samsung Life Insurance", "sector": "Financials"},
-    "066570": {"corp_code": "00401731", "name": "LG Electronics", "sector": "Consumer Discretionary"},
-    "003550": {"corp_code": "00120021", "name": "LG Corp", "sector": "Industrials"},
-    "090430": {"corp_code": "00583424", "name": "Amorepacific", "sector": "Consumer Staples"},
+import functools
+from pathlib import Path
+
+import pandas as pd
+
+UNIVERSE_CSV = Path(__file__).resolve().parent / "kospi_universe.csv"
+
+# Companies whose corp_code and full tag mapping were verified by hand
+# against real DART filings during the initial build (see FINDINGS.md).
+HAND_VERIFIED = {
+    "005930", "000660", "373220", "005380", "005490", "035420", "000270",
+    "051910", "006400", "035720", "105560", "055550", "012330", "068270",
+    "096770", "017670", "015760", "032830", "066570", "003550", "090430",
 }
 
-# Liquidity-order balance sheets (no current/non-current split), so scores
-# needing working capital exclude them automatically via missing tags.
-EXPECTED_FINANCIAL_FILERS = {"105560", "055550", "032830"}
+# Financial institutions file liquidity-order balance sheets with no
+# current/non-current split, so every working-capital-dependent score
+# excludes them automatically via missing tags — the same principled
+# exclusion as the US and Brazil paths, reached by a third mechanism.
+FINANCIAL_KSIC_DIVISIONS = {"64", "65", "66"}
+
+
+@functools.lru_cache(maxsize=1)
+def load_universe() -> pd.DataFrame:
+    df = pd.read_csv(UNIVERSE_CSV, dtype={"ticker": str, "corp_code": str,
+                                          "induty_code": str, "sector": str})
+    df["ticker"] = df["ticker"].str.zfill(6)
+    df["corp_code"] = df["corp_code"].str.zfill(8)
+    return df
 
 
 def get_kr_blue_chips() -> dict[str, str]:
-    """Return {ticker: corp_code} for run_dart_ingest()."""
-    return {t: v["corp_code"] for t, v in KR_BLUE_CHIPS.items()}
+    """{ticker: corp_code} for run_dart_ingest()."""
+    return dict(zip(load_universe()["ticker"], load_universe()["corp_code"]))
 
 
 def get_kr_sectors() -> dict[str, str]:
-    return {t: v["sector"] for t, v in KR_BLUE_CHIPS.items()}
+    return dict(zip(load_universe()["ticker"], load_universe()["sector"]))
+
+
+def get_kr_names() -> dict[str, str]:
+    return dict(zip(load_universe()["ticker"], load_universe()["name"]))
+
+
+def is_financial(ticker: str) -> bool:
+    row = load_universe().set_index("ticker")
+    if ticker not in row.index:
+        return False
+    return str(row.loc[ticker, "sector"]).removeprefix("KSIC-") in FINANCIAL_KSIC_DIVISIONS

@@ -1,19 +1,29 @@
-"""Decile backtest: monthly rebalance on the composite, equal-weight deciles.
+"""Bucket backtest: monthly rebalance on the composite, equal-weight buckets.
 
-Run the whole pipeline with:  python -m screener.backtest
+Run the whole pipeline with:
+    python -m screener.backtest                    # S&P 500 (deciles)
+    python -m screener.backtest --universe kospi   # KOSPI 120 (quintiles)
 
 At each month-end rebalance date the pipeline:
   1. Builds current + prior-year PIT snapshots (filing-date gated — a March
-     snapshot can only see 10-Ks already filed by that date).
+     snapshot can only see annual reports already filed by that date).
   2. Computes F/Z/O, sector-neutral z-scores, and the walk-forward LASSO
      composite.
-  3. Ranks the cross-section into deciles (1 = worst composite, 10 = best),
+  3. Ranks the cross-section into N buckets (1 = worst composite, N = best),
      optionally restricted to point-in-time index constituents.
-  4. Holds each equal-weight decile for one month; forward returns come from
-     Yahoo month-end closes.
+  4. Holds each equal-weight bucket for one month; forward returns come from
+     Yahoo month-end closes in the listing currency.
 
-Outputs are written to data/ (scores panel, decile return series, LASSO
-coefficient history) for validation.py and the dashboard to consume.
+The bucket count is a property of the universe, not a constant: 10 for the
+~500-name S&P 500, 5 for the 120-name KOSPI set, where deciles would leave
+~7 names per bucket and the "decile return" would be dominated by a handful
+of stocks' idiosyncratic moves. See screener/universes.py.
+
+Column names stay `D1..DN` and `spread = top - bottom` for both universes,
+so validation.py and the dashboard need no per-market special-casing.
+
+Outputs are written to the universe's own paths in data/ (scores panel,
+bucket return series, LASSO coefficient history).
 """
 
 from __future__ import annotations
@@ -28,7 +38,8 @@ from pit_fundamentals.query import build_pit_snapshot
 from screener import composite as composite_mod
 from screener import normalize, scores as scores_mod
 from screener.prices import get_monthly_prices, monthly_returns
-from screener.universe import build_membership, get_sp500_constituents, get_sectors, was_member
+from screener.universe import was_member
+from screener.universes import Universe, get_universe
 
 log = logging.getLogger(__name__)
 
@@ -42,14 +53,26 @@ def filter_universe(on_date, tickers: list[str], membership: pd.DataFrame | None
     return [t for t in tickers if was_member(t, on_date, membership)]
 
 
-def form_deciles(composite_scores: pd.Series, n_deciles: int = config.N_DECILES) -> pd.Series:
-    """Decile assignment 1..n (1 = worst score) for one cross-section."""
+def form_buckets(
+    composite_scores: pd.Series,
+    n_buckets: int = config.N_DECILES,
+    min_per_bucket: int = config.MIN_NAMES_PER_BUCKET,
+) -> pd.Series:
+    """Bucket assignment 1..n (1 = worst score) for one cross-section.
+
+    A cross-section too thin to fill every bucket `min_per_bucket` deep is
+    left entirely unassigned, rather than forming buckets of one or two
+    names whose "return" is idiosyncratic noise. See MIN_NAMES_PER_BUCKET."""
     valid = composite_scores.dropna()
-    if len(valid) < n_deciles:
+    if len(valid) < n_buckets * min_per_bucket:
         return pd.Series(np.nan, index=composite_scores.index)
     ranks = valid.rank(method="first")
-    deciles = pd.qcut(ranks, n_deciles, labels=range(1, n_deciles + 1)).astype(float)
-    return deciles.reindex(composite_scores.index)
+    buckets = pd.qcut(ranks, n_buckets, labels=range(1, n_buckets + 1)).astype(float)
+    return buckets.reindex(composite_scores.index)
+
+
+# Back-compat alias: the S&P 500 path and its tests call these deciles.
+form_deciles = form_buckets
 
 
 def build_scores_panel(
@@ -109,7 +132,7 @@ def build_scores_panel(
     return panel.set_index(["as_of_date", "ticker"]).sort_index()
 
 
-def decile_return_series(panel: pd.DataFrame) -> pd.DataFrame:
+def bucket_return_series(panel: pd.DataFrame, n_buckets: int = config.N_DECILES) -> pd.DataFrame:
     """Equal-weight next-month return per decile per rebalance date, plus the
     decile-10-minus-decile-1 long-short spread."""
     rows = []
@@ -120,51 +143,82 @@ def decile_return_series(panel: pd.DataFrame) -> pd.DataFrame:
             row[f"D{int(dec)}"] = members["fwd_ret_1m"].mean()
         rows.append(row)
     out = pd.DataFrame(rows).set_index("date").sort_index()
-    if "D10" in out and "D1" in out:
-        out["spread"] = out["D10"] - out["D1"]
+    # `spread` is always top-minus-bottom bucket, whatever N is, so every
+    # downstream consumer (validation, dashboard) is universe-agnostic.
+    top, bottom = f"D{n_buckets}", "D1"
+    if top in out and bottom in out:
+        out["spread"] = out[top] - out[bottom]
     return out
 
 
-def run_pipeline(db_path=config.DB_PATH) -> dict[str, pd.DataFrame]:
-    constituents = get_sp500_constituents()
-    tickers = constituents["ticker"].tolist()
-    sectors = get_sectors(tickers)
-    membership = build_membership(constituents) if config.USE_PIT_UNIVERSE else None
+decile_return_series = bucket_return_series  # back-compat alias
 
-    prices = get_monthly_prices(tickers)
+
+def run_pipeline(universe: Universe | str = "sp500", db_path=None) -> dict[str, pd.DataFrame]:
+    """Run the full scoring + bucket backtest for one universe.
+
+    `db_path` overrides the universe's own PIT database (used by tests);
+    everything else — tickers, sectors, price symbols, bucket count, output
+    paths — comes from the Universe so no market is special-cased here.
+    """
+    if isinstance(universe, str):
+        universe = get_universe(universe)
+    db_path = db_path or universe.db_path
+
+    tickers = universe.tickers()
+    sectors = universe.sectors()
+    membership = universe.membership()
+
+    prices = get_monthly_prices(
+        tickers, start=universe.start, end=universe.end,
+        cache_path=universe.prices_cache,
+        symbol_suffix=universe.price_symbol_suffix,
+    )
     tickers = [t for t in tickers if t in prices.columns and prices[t].notna().any()]
-    rebalance_dates = pd.date_range(config.BACKTEST_START, config.BACKTEST_END,
-                                    freq=config.REBALANCE_FREQ)
+    log.info("%s: %d tickers with price history, %d buckets, %s",
+             universe.name, len(tickers), universe.n_buckets, universe.currency)
+
+    rebalance_dates = pd.date_range(universe.start, universe.end, freq=config.REBALANCE_FREQ)
     rebalance_dates = rebalance_dates[rebalance_dates <= prices.index.max()]
 
     panel = build_scores_panel(rebalance_dates, tickers, sectors, prices,
                                membership=membership, db_path=db_path)
     comp, coefs = composite_mod.compute_composite(panel)
     panel["composite_score"] = comp
-    panel["decile"] = panel.groupby(level="as_of_date")["composite_score"].transform(form_deciles)
+    panel["decile"] = panel.groupby(level="as_of_date")["composite_score"].transform(
+        lambda s: form_buckets(s, universe.n_buckets)
+    )
 
-    dec_rets = decile_return_series(panel)
+    dec_rets = bucket_return_series(panel, universe.n_buckets)
 
-    panel.reset_index().to_parquet(config.SCORES_PANEL_PATH)
-    dec_rets.to_parquet(config.DECILE_RETURNS_PATH)
-    coefs.to_parquet(config.COEFS_PATH)
-    log.info("Saved panel (%d rows), decile returns (%d months), coefs (%d refits)",
+    panel.reset_index().to_parquet(universe.panel_path)
+    dec_rets.to_parquet(universe.bucket_returns_path)
+    coefs.to_parquet(universe.coefs_path)
+    log.info("Saved panel (%d rows), bucket returns (%d months), coefs (%d refits)",
              len(panel), len(dec_rets), len(coefs))
-    return {"panel": panel, "decile_returns": dec_rets, "coefs": coefs}
+    return {"panel": panel, "decile_returns": dec_rets, "coefs": coefs, "universe": universe}
 
 
 def main() -> None:
+    import argparse
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    out = run_pipeline()
+    p = argparse.ArgumentParser(description="Run the bucket backtest for one universe")
+    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    args = p.parse_args()
+
+    out = run_pipeline(args.universe)
+    uni = out["universe"]
     dec = out["decile_returns"].dropna(subset=["spread"])
     full = (1 + dec["spread"]).prod() - 1
     half = len(dec) // 2
     first = (1 + dec["spread"].iloc[:half]).prod() - 1
     second = (1 + dec["spread"].iloc[half:]).prod() - 1
-    print("\n=== Decile backtest (D10 - D1, equal weight, monthly) ===")
+    label = f"D{uni.n_buckets} - D1"
+    print(f"\n=== {uni.name} bucket backtest ({label}, equal weight, monthly, {uni.currency}) ===")
     print(f"Months: {len(dec)}   Full-period cumulative spread: {full:+.1%}")
     print(f"First half: {first:+.1%}   Second half: {second:+.1%}")
-    print("Run `python -m screener.validation` for Newey-West / DSR statistics.")
+    print(f"Run `python -m screener.validation --universe {uni.name}` for Newey-West / DSR statistics.")
 
 
 if __name__ == "__main__":

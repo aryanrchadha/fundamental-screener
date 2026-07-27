@@ -83,6 +83,39 @@ CACHE_TTL_SECTOR = 180 * 86400    # sector classification rarely changes
 # ---------------------------------------------------------------------------
 # Modeling
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# KOSPI (South Korea) universe — see screener/universes.py
+# ---------------------------------------------------------------------------
+KR_DB_PATH = DATA_DIR / "pit_kr.duckdb"
+KR_PRICES_CACHE_PATH = DATA_DIR / "kr_prices_monthly.parquet"
+KR_SCORES_PANEL_PATH = DATA_DIR / "kr_scores_panel.parquet"
+KR_BUCKET_RETURNS_PATH = DATA_DIR / "kr_bucket_returns.parquet"
+KR_COEFS_PATH = DATA_DIR / "kr_lasso_coefs.parquet"
+KR_VALIDATION_SUMMARY_PATH = DATA_DIR / "kr_validation_summary.csv"
+KR_ROLLING_SPREAD_PATH = DATA_DIR / "kr_rolling_spread.parquet"
+
+# DART's structured financial data begins with FY2015, so the first usable
+# annual snapshot is only public in 2016 (filings land ~Mar of the
+# following year). Starting the backtest mid-2016 guarantees every
+# rebalance sees a filed annual report rather than an empty snapshot.
+KR_BACKTEST_START = "2016-07-31"
+KR_BACKTEST_END = "2025-12-31"
+
+# 120 liquid names, of which ~2/3 are fully scoreable after honest tag
+# exclusions -> quintiles hold ~15 names each. Deciles would hold ~7, at
+# which point a "decile return" is mostly a handful of stocks' idiosyncratic
+# noise rather than a cross-sectional signal.
+KR_N_BUCKETS = 5
+
+# A cross-section is only ranked if it can fill every bucket this deeply.
+# Without it, a thin early cross-section still forms buckets — the KOSPI
+# panel averages ~29 scoreable names in 2017, which across quintiles is ~6
+# per bucket, so a "bucket return" there is a handful of stocks'
+# idiosyncratic noise rather than a cross-sectional signal. Stated as a
+# uniform rule (not a hand-picked start date) so it applies identically to
+# both universes and cannot be tuned to flatter a result.
+MIN_NAMES_PER_BUCKET = 5
+
 MIN_SECTOR_SIZE = 5           # below this, z-score vs whole universe instead
 LASSO_ALPHAS = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1]
 LASSO_CV_SPLITS = 5

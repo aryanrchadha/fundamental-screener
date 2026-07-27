@@ -377,7 +377,7 @@ def test_no_common_class_at_all_warns_and_excludes(filings_df, caplog):
     with caplog.at_level("WARNING"):
         facts = _shares_only(shares, filings_df)
     assert facts.empty
-    assert any("no share class matching" in r.message for r in caplog.records)
+    assert any("no common/voting share class" in r.message for r in caplog.records)
 
 
 def test_shares_merge_with_financial_statement_facts(filings_df, fin_df):
@@ -389,3 +389,141 @@ def test_shares_merge_with_financial_statement_facts(filings_df, fin_df):
     tags = set(facts["tag"])
     assert {"Assets", "Revenues", "CommonStockSharesOutstanding"} <= tags
     assert facts["taxonomy"].eq("dart-kr").all()
+
+
+@pytest.mark.parametrize(
+    "common_label,preferred_label",
+    [
+        # 2015-2019 convention: labelled by VOTING RIGHT, with no 보통주
+        # substring anywhere. A 보통주-only matcher produced no share count
+        # at all for these years (KB FY2015-18, POSCO FY2017-19, LG
+        # Electronics FY2015-16, and others across the 120-name ingest).
+        ("의결권 있는 주식", "의결권 없는 주식"),
+        ("의결권 있는 주식", "의결권 없는\n주식"),
+        # 2020+ convention: labelled by SHARE TYPE.
+        ("보통주", "우선주"),
+    ],
+)
+def test_both_share_label_conventions_resolve(common_label, preferred_label, filings_df):
+    """`se` uses two different naming conventions that changed over time —
+    by voting right in older filings, by share type in newer ones. Both must
+    resolve to the same canonical tag, and neither may pick up preferred."""
+    shares = pd.DataFrame(
+        [
+            _share_row(common_label, "163,647,814", "763,176", "162,884,638"),
+            _share_row(preferred_label, "17,185,992", "4,693", "17,181,299"),
+            _share_row("합계", "180,833,806", "767,869", "180,065,937"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    got = facts[facts["tag"] == "CommonStockSharesOutstanding"]
+    assert len(got) == 1
+    assert got["value"].iloc[0] == 162_884_638.0
+
+
+def test_total_used_only_when_it_is_the_sole_populated_class(filings_df):
+    """Older filings sometimes give no named common class. If 합계 is the
+    only populated row the company has one share class, so the total IS
+    common and is safe to use."""
+    shares = pd.DataFrame(
+        [
+            _share_row("종류주", "-", "-", "-"),
+            _share_row("합계", "100,000,000", "1,000,000", "99,000,000"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    got = facts[facts["tag"] == "CommonStockSharesOutstanding"]
+    assert len(got) == 1
+    assert got["value"].iloc[0] == 99_000_000.0
+
+
+def test_total_refused_when_another_class_is_populated(filings_df, caplog):
+    """...but if any other class carries a value, 합계 bundles preferred and
+    using it would be a silent error (Hyundai Motor: 202.3M common vs 261.3M
+    total). Exclude instead."""
+    shares = pd.DataFrame(
+        [
+            _share_row("종류주", "10,557,830", "6,217", "10,551,613"),
+            _share_row("합계", "100,000,000", "-", "99,000,000"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    with caplog.at_level("WARNING"):
+        facts = _shares_only(shares, filings_df)
+    assert facts.empty
+    assert any("no common/voting share class" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "의결권 있는 주식",     # single space
+        "의결권  있는 주식",    # DOUBLE space
+        "의결권\n있는 주식",    # newline (Hanwha Aerospace FY2017)
+        "의결권있는주식",       # no separator at all
+        "의결권있는 주식",      # mixed
+    ],
+)
+def test_whitespace_variants_of_voting_label_all_resolve(label, filings_df):
+    """The separator inside '의결권 있는' is inconsistent across real
+    filings — space, double space, newline, or nothing. Matching one literal
+    spelling silently lost the others across the 120-name/9-year ingest, so
+    whitespace is stripped before comparison."""
+    shares = pd.DataFrame(
+        [
+            _share_row(label, "52,600,000", "-", "52,600,000"),
+            _share_row(label.replace("있는", "없는"), "-", "-", "-"),
+            _share_row("합계", "52,600,000", "-", "52,600,000"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    got = facts[facts["tag"] == "CommonStockSharesOutstanding"]
+    assert len(got) == 1
+    assert got["value"].iloc[0] == 52_600_000.0
+
+
+def test_non_voting_never_matches_regardless_of_whitespace(filings_df):
+    """'의결권없는' (without voting rights) must never be read as common,
+    however it is spaced — it is the preferred class."""
+    shares = pd.DataFrame(
+        [
+            _share_row("의결권  없는 주식", "17,185,992", "-", "17,181,299"),
+            _share_row("의결권없는주식*", "1,000", "-", "1,000"),
+            _share_row("비고", "-", "-", "-"),
+        ]
+    )
+    facts = _shares_only(shares, filings_df)
+    assert facts.empty
+
+
+@pytest.mark.parametrize(
+    "label,expected",
+    [
+        ("보통주", True),
+        ("의결권 있는 주식", True),
+        ("의결권  있는 주식", True),        # double space
+        ("의결권\n있는 주식", True),        # newline
+        ("의결권있는주식", True),           # no separator
+        ("의결권이있는주식", True),         # nominative particle 이 inserted
+        ("의결권 있는 주식\n(보통주)", True),
+        ("우선주", False),
+        ("의결권 없는 주식", False),
+        ("의결권이없는주식", False),        # particle + non-voting
+        ("의결권없는주식*", False),         # footnote asterisk
+        ("종류주", False),                  # Amorepacific class share
+        ("합계", False),
+        ("비고", False),
+    ],
+)
+def test_common_share_label_predicate(label, expected):
+    """Every share-class label spelling observed across the full 120-name x
+    9-year ingest. Matching is grammatical (names 보통주, or mentions
+    의결권 together with 있는) rather than an enumeration of spellings,
+    because filings vary in separator AND particle independently — an
+    enumeration sprang a fresh leak at each widening of the sample."""
+    from pit_fundamentals.dart_kr_client import _is_common_share_label
+
+    assert _is_common_share_label(label) is expected
