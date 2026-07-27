@@ -48,6 +48,29 @@ filings, so its effective sample is nearer 3 than 26. Reported for
 completeness; the pipeline still refuses to emit a validation table for it.
 Full reasoning in [FINDINGS.md](FINDINGS.md).
 
+## Rolling out-of-sample decay
+
+The rolling chart's shaded band is derived from the Deflated Sharpe Ratio,
+not a plain SE band: for each 24-month window it marks the spread needed
+for **that window's own DSR to reach 95%**. It is the DSR inverted, and the
+correspondence is exact — "outside the band" and "DSR ≥ 0.95" agree on 100%
+of test windows.
+
+| | Windows clearing the DSR hurdle | Median hurdle | Mean spread |
+|---|---|---|---|
+| **Korea** (KOSPI 120) | **12 / 82** — all ending Feb 2019 – May 2020 | +13.9%/yr | −2.1%/yr |
+| **US** (S&P 500) | **0 / 144** | +18.5%/yr | −0.1%/yr |
+
+Korea's rolling spread by window-year: **2019 +24%**, 2020 +8%, 2021 −14%,
+2022 −26%, 2023 −2%, 2024 −1%, 2025 −2%. That is real decay — an early
+stretch that beat a multiple-testing-corrected benchmark, then five years
+that did not. The US never clears the bar at any point, so the two markets
+fail in genuinely different ways. Caveat in
+[FINDINGS.md](FINDINGS.md): the clearing windows lean partly on the
+thinnest Korean cross-sections (median 80 scored names vs 99 later).
+
+View it with `python -m dashboard.app --universe kospi` → "Rolling spread".
+
 ## Survivorship correction: run, and reported
 
 `--survivorship` restricts every rebalance to names actually listed/in the

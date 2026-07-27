@@ -508,6 +508,52 @@ their t-stats and Sharpes, which are unit-free, are.
    grouping the US path uses, so cross-market comparison of the
    *sector-neutral* step is approximate.
 
+## Rolling out-of-sample decay: Korea, and the contrast with the US
+
+The rolling chart's band is now derived from the Deflated Sharpe Ratio, as
+the brief asked, rather than the plain ±1.96 SE band an earlier revision
+shipped. For each 24-month window it plots the spread that window would
+have needed for **its own DSR to reach 95%**, given its volatility,
+empirical skew and kurtosis, length, and the four related scores examined
+on this data. The construction is the DSR algebraically inverted, and the
+correspondence is exact: across 177 test windows, "outside the band" and
+"that window's DSR ≥ 0.95" agree 100% of the time. A line inside the band
+marks a stretch that would **not** have survived the same correction the
+summary table applies.
+
+Getting there required fixing an error of my own: the first version of this
+band plotted SR0 — the expected best-of-four-random Sharpe — and described
+it as a stricter bar than the SE band. It is the *looser* one; the expected
+maximum of four draws sits near the 1.05σ level, below a 1.96σ interval.
+A unit test comparing the two band widths is what caught it.
+
+**Korea (82 windows, Feb 2019 – Nov 2025), median hurdle +13.9%/yr:**
+
+| Rolling-window year | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|---|---|---|
+| Mean annualized spread | **+24%** | +8% | −14% | −26% | −2% | −1% | −2% |
+
+**12 of 82 windows clear the DSR hurdle, and every one of them ends between
+February 2019 and May 2020.** Nothing since comes close. The first half of
+the rolling sample averages −0.1%/yr and the second half −4.1%/yr. This is
+the clearest decay signal anywhere in the project: a genuine early stretch
+in which the Korean composite beat a multiple-testing-corrected benchmark,
+followed by five years in which it did not.
+
+One caveat, stated because it cuts against the finding's strength: those
+clearing windows look back over March 2017 – May 2020, where the median
+cross-section held 80 fully-scored names (minimum 33) against 99 in the
+period after. The strongest stretch therefore leans partly on the thinnest
+data, and some of that +24% is likely small-cross-section noise rather than
+signal.
+
+**The US, by contrast, never clears it at all — 0 of 144 windows**, median
+hurdle +18.5%/yr, mean spread −0.1%/yr. The two markets fail differently:
+Korea's effect decayed, while the US effect is absent throughout the
+sample. That distinction only becomes visible with a DSR-derived band; a
+plain SE band would have flagged 11% of Korean and 7% of US windows and
+obscured the difference.
+
 ## Survivorship correction, run for both backtestable universes
 
 Both markets were re-run with each rebalance restricted to names actually

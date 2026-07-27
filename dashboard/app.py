@@ -81,19 +81,36 @@ def fig_f_scatter(panel: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def fig_rolling(roll: pd.DataFrame) -> go.Figure:
+def fig_rolling(roll: pd.DataFrame, universe_name: str = "") -> go.Figure:
     # Neutral title on purpose: the chart reports what the data shows,
     # including decay if that is what it shows.
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=roll.index, y=roll["hi"], line=dict(width=0), showlegend=False))
+    has_dsr = {"dsr_lo", "dsr_hi"} <= set(roll.columns)
+    if has_dsr:
+        # The DSR band: the spread each window would need for its OWN
+        # Deflated Sharpe Ratio to reach 95%, given that window's
+        # volatility, empirical skew/kurtosis and the four related scores
+        # tried on this data. A line inside the band marks a window that
+        # would NOT have survived the correction the summary table applies.
+        fig.add_trace(go.Scatter(x=roll.index, y=roll["dsr_hi"], line=dict(width=0),
+                                 showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(
+            x=roll.index, y=roll["dsr_lo"], fill="tonexty",
+            fillcolor="rgba(200,120,40,0.18)", line=dict(width=0),
+            name="Deflated-Sharpe 95% band (would this window survive?)"))
+    fig.add_trace(go.Scatter(x=roll.index, y=roll["hi"], line=dict(width=0),
+                             showlegend=False, hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=roll.index, y=roll["lo"], fill="tonexty",
-                             fillcolor="rgba(31,119,180,0.2)", line=dict(width=0),
-                             name="±1.96 SE band"))
+                             fillcolor="rgba(31,119,180,0.15)", line=dict(width=0),
+                             name="±1.96 SE band (descriptive)"))
     fig.add_trace(go.Scatter(x=roll.index, y=roll["ann_spread"], name="Annualized spread",
                              line=dict(color="rgb(31,119,180)", width=2)))
     fig.add_hline(y=0, line_dash="dot")
-    fig.update_layout(title=f"Rolling {config.ROLLING_WINDOW_MONTHS}-Month Decile Spread (annualized)",
-                      yaxis_tickformat=".0%", height=500)
+    title = f"Rolling {config.ROLLING_WINDOW_MONTHS}-Month Spread (annualized)"
+    if universe_name:
+        title += f" — {universe_name}"
+    fig.update_layout(title=title, yaxis_tickformat=".0%", height=520,
+                      legend=dict(orientation="h", y=-0.15))
     return fig
 
 
@@ -138,7 +155,7 @@ def build_app(universe="sp500") -> Dash:
             else _unavailable("Bucket returns")]),
         dcc.Tab(label="F-Score scatter", children=[dcc.Graph(figure=fig_f_scatter(panel))]),
         dcc.Tab(label="Rolling spread", children=[
-            dcc.Graph(figure=fig_rolling(roll)) if roll is not None
+            dcc.Graph(figure=fig_rolling(roll, uni.name)) if roll is not None
             else _unavailable("Rolling spread")]),
         dcc.Tab(label="Validation", children=(
             [html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),

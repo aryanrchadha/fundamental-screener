@@ -122,13 +122,104 @@ def single_score_spreads(panel: pd.DataFrame,
     return out
 
 
-def rolling_spread(spread: pd.Series, window: int = config.ROLLING_WINDOW_MONTHS) -> pd.DataFrame:
-    """Rolling annualized mean spread with a +/-1.96 SE band (per-window,
-    HAC-free — the band is descriptive; formal inference is the NW/DSR
-    table)."""
+def _sr0_benchmark(returns: np.ndarray, n_trials: int) -> float:
+    """Expected MAXIMUM per-period Sharpe of `n_trials` skill-less strategies
+    (Bailey & López de Prado 2014) — the same SR0 the Deflated Sharpe Ratio
+    deflates by, extracted so a rolling window can be judged against it."""
+    T = len(returns)
+    if T < 3:
+        return float("nan")
+    sd = returns.std(ddof=1)
+    if not np.isfinite(sd) or sd == 0:
+        return float("nan")
+    sr = returns.mean() / sd
+    g3 = float(sps.skew(returns))
+    g4 = float(sps.kurtosis(returns, fisher=False))
+    var_trials = (1 - g3 * sr + (g4 - 1) / 4 * sr**2) / (T - 1)
+    if not np.isfinite(var_trials) or var_trials <= 0:
+        return float("nan")
+    # N=1 is the no-multiple-testing case. The expected-maximum formula is
+    # undefined there (Phi^-1(1 - 1/1) = -inf), but the limit is simply "no
+    # deflation", so return 0 rather than propagating a NaN through the band.
+    if n_trials <= 1:
+        return 0.0
+    emc = 0.5772156649015329
+    z1 = sps.norm.ppf(1 - 1.0 / n_trials)
+    z2 = sps.norm.ppf(1 - 1.0 / (n_trials * math.e))
+    return math.sqrt(var_trials) * ((1 - emc) * z1 + emc * z2)
+
+
+def _dsr_critical_return(returns: np.ndarray, n_trials: int, conf: float = 0.95) -> float:
+    """The ANNUALIZED spread a window would need for its own Deflated Sharpe
+    Ratio to reach `conf`.
+
+    Inverting the DSR: DSR = Φ((SR − SR0)·√(T−1) / denom), so DSR ≥ conf
+    requires SR ≥ SR0 + z_conf·denom/√(T−1), where SR0 is the expected best
+    of `n_trials` skill-less strategies and denom carries the window's
+    empirical skew and kurtosis. Multiplying through by the window's own
+    standard deviation and annualizing puts that hurdle in return space.
+
+    This is a strictly HIGHER bar than the plain ±1.96 SE band: it adds the
+    multiple-testing benchmark SR0 on top of a confidence term, whereas the
+    SE band only asks whether the mean differs from zero. (An earlier
+    revision plotted SR0 alone, which is the *lower* bar — the expected max
+    of four draws sits near the 1.05σ level, not 1.96σ — and describing it
+    as stricter was simply wrong.)
+
+    denom is evaluated at the window's realized Sharpe, so the inversion is
+    exact up to that term's mild dependence on SR itself.
+    """
+    T = len(returns)
+    if T < 3:
+        return float("nan")
+    sd = returns.std(ddof=1)
+    if not np.isfinite(sd) or sd == 0:
+        return float("nan")
+    sr0 = _sr0_benchmark(returns, n_trials)
+    if not np.isfinite(sr0):
+        return float("nan")
+    sr = returns.mean() / sd
+    g3 = float(sps.skew(returns))
+    g4 = float(sps.kurtosis(returns, fisher=False))
+    denom = math.sqrt(max(1 - g3 * sr + (g4 - 1) / 4 * sr**2, 1e-12))
+    required_sr = sr0 + sps.norm.ppf(conf) * denom / math.sqrt(T - 1)
+    return required_sr * sd * 12
+
+
+def rolling_spread(
+    spread: pd.Series,
+    window: int = config.ROLLING_WINDOW_MONTHS,
+    n_trials: int = config.N_DSR_TRIALS,
+) -> pd.DataFrame:
+    """Rolling annualized spread, with a band derived from the DSR itself.
+
+    Columns:
+      ann_spread   realized annualized top-minus-bottom spread in the window
+      lo / hi      plain +/-1.96 SE band — descriptive only, correcting for
+                   neither multiple testing nor non-normality
+      dsr_lo/hi    the spread each window would need for its OWN Deflated
+                   Sharpe Ratio to reach 95%, given that window's
+                   volatility, empirical skew and kurtosis, length, and the
+                   four related scores examined on this data
+
+    The two answer different questions, and the DSR band is the harder one:
+    the SE band asks only "is this window's mean distinguishable from
+    zero", while the DSR band asks "would this window survive the same
+    multiple-testing correction the summary table applies". A window whose
+    line stays inside the DSR band would NOT have survived, however far
+    from zero it looks.
+    """
     mu = spread.rolling(window).mean() * 12
-    se = spread.rolling(window).std(ddof=1) / np.sqrt(window) * 12
-    return pd.DataFrame({"ann_spread": mu, "lo": mu - 1.96 * se, "hi": mu + 1.96 * se})
+    sd_m = spread.rolling(window).std(ddof=1)
+    se = sd_m / np.sqrt(window) * 12
+    crit = spread.rolling(window).apply(
+        lambda w: _dsr_critical_return(np.asarray(w, dtype=float), n_trials), raw=True
+    )
+    return pd.DataFrame({
+        "ann_spread": mu,
+        "lo": mu - 1.96 * se, "hi": mu + 1.96 * se,
+        "dsr_lo": -crit, "dsr_hi": crit,
+    })
 
 
 def build_summary(panel: pd.DataFrame, decile_rets: pd.DataFrame,
