@@ -57,14 +57,22 @@ correspondence is exact — "outside the band" and "DSR ≥ 0.95" agree on 100%
 of test windows.
 
 The same chart is produced for **every** backtestable run — `--universe
-sp500` and `--universe kospi`, each with and without `--survivorship`:
+sp500` and `--universe kospi`, each with and without `--survivorship` — and,
+by explicit request rather than by default, for the screener-only India
+universe too:
 
-| Run | Clears DSR hurdle | Breaches negative hurdle | Median hurdle | Mean spread |
-|---|---|---|---|---|
-| US S&P 500 (static) | **0 / 144** | 1 / 144 | +18.5%/yr | −0.1%/yr |
-| US, survivorship-corrected | 20 / 144 † | **27 / 144** | +8.5%/yr | −0.5%/yr |
-| Korea KOSPI 120 | **12 / 82** — all Feb 2019 – May 2020 | 19 / 82 | +13.9%/yr | −2.1%/yr |
-| Korea, survivorship-corrected | identical to static | | | |
+| Run | Windows | Clears DSR hurdle | Breaches negative hurdle | Median hurdle | Mean spread |
+|---|---|---|---|---|---|
+| US S&P 500 (static) | 144 | **0 / 144** | 1 / 144 | +18.5%/yr | −0.1%/yr |
+| US, survivorship-corrected | 144 | 20 / 144 † | **27 / 144** | +8.5%/yr | −0.5%/yr |
+| Korea KOSPI 120 | 82 | **12 / 82** — all Feb 2019 – May 2020 | 19 / 82 | +13.9%/yr | −2.1%/yr |
+| Korea, survivorship-corrected | 82 | identical to static | | | |
+| **India BSE 100** ‡ | **3** | 0 / 3 | 0 / 3 | +17.9%/yr | +2.3%/yr |
+
+‡ India is not a backtestable universe (see below) — 27 monthly
+cross-sections and a 24-month window leave only 3, 96%-overlapping windows.
+Shown because it was explicitly asked for at the standard window, not
+because 3 points support the same reading as 144 or 82. See FINDINGS.md.
 
 Rolling spread by window-year:
 
@@ -386,12 +394,13 @@ models agreeing on the same name, with no tuning.
 
 ### The screen, and what the dashboard shows
 
-`--universe india` runs `run_screen()`: it builds the scores panel and
-**stops**, deliberately producing no bucket returns and no validation
-table. 2,700 company-months across 27 dates, 77 of 100 names scored in the
-latest cross-section. The composite here is the documented **equal-weight**
-prior rather than a LASSO fit — fitting three coefficients on ~3
-independent fundamental cross-sections would be fitting noise.
+`--universe india` runs `run_screen()`: it builds the scores panel, a
+bucket-return series, and a rolling-spread chart — but deliberately **no
+LASSO fit and no Newey-West/Deflated-Sharpe validation table**. 2,700
+company-months across 27 dates, 77 of 100 names scored in the latest
+cross-section. The composite is the documented **equal-weight** prior
+rather than a LASSO fit — fitting three coefficients on ~3 independent
+fundamental cross-sections would be fitting noise.
 
 Latest cross-section, top and bottom of the composite ranking:
 
@@ -413,12 +422,21 @@ can carry a high raw Z and still rank low if it trails its own sector
 (Nestlé India, raw Z = 23.8, sits in the bottom quintile against Consumer
 Defensive peers).
 
-**The dashboard degrades honestly.** Three views are real for India — the
-searchable table, the sector heatmap, and the F-Score vs forward-return
-scatter, all built from the scores panel. The three that depend on a
-backtest (bucket returns, rolling spread, validation summary) render an
-explanation of *why* they are absent instead of an empty chart, because a
-blank axis would imply evidence that was never produced.
+**The dashboard degrades honestly, view by view rather than all-or-nothing.**
+The searchable table, sector heatmap, F-Score scatter, bucket returns, and
+rolling spread are all real for India, built from the scores panel and
+labeled descriptive wherever they're shown. Only the validation summary —
+the one view that would present a point estimate as a statistical result —
+renders an explanation of why it's absent instead of an empty table.
+
+**The rolling chart exists, and it is close to the smallest one that can.**
+27 monthly cross-sections and a 24-month window leave exactly **3
+overlapping windows** (96% month-overlap between any two), all sitting far
+inside the DSR band (spreads +0.7% to +3.8%/yr against a ±18% hurdle). This
+was built deliberately, at the same 24-month window as the US/Korea charts
+for visual consistency, over a shorter-window alternative — see
+[FINDINGS.md](FINDINGS.md) for the exact values and why 3 near-identical,
+96%-overlapping points confirm nothing about decay one way or the other.
 
 **The PIT guarantee here is weaker, and that is a property of the source.**
 Yahoo serves one *current* value per period, so a figure revised later

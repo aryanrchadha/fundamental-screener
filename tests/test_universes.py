@@ -158,28 +158,32 @@ def test_dashboard_renders_without_backtest_artifacts(tmp_path, monkeypatch):
     assert "Screener table" in rendered and "Sector heatmap" in rendered
 
 
-def test_screen_writes_a_panel_and_no_backtest_artifacts(tmp_path, monkeypatch):
-    """run_screen must produce the scores panel and NOTHING else. FINDINGS.md
-    states India emits no validation table; this is what keeps that true, so
-    a future refactor cannot quietly start publishing statistics the data
-    cannot support."""
+def _run_screen_fixture(tmp_path, monkeypatch, n_months=6, n_tickers=40):
+    """Shared fixture: a fake scores panel wide/long enough to exercise
+    run_screen's bucket-return and rolling-spread computation, with
+    randomized (not constant) forward returns so a spread series with real
+    variance comes out the other end."""
     from dataclasses import replace
 
+    import numpy as np
     import pandas as pd
 
     import screener.backtest as bt
     from screener.universes import INDIA
 
-    dates = pd.to_datetime(["2025-01-31", "2025-02-28"])
-    tickers = [f"T{i}" for i in range(40)]
+    dates = pd.date_range("2025-01-31", periods=n_months, freq="ME")
+    tickers = [f"T{i}" for i in range(n_tickers)]
+    rng = np.random.default_rng(0)
 
     def fake_panel(rebalance_dates, tks, sectors, prices, membership=None, db_path=None):
         idx = pd.MultiIndex.from_product([dates, tickers], names=["as_of_date", "ticker"])
         df = pd.DataFrame(index=idx)
         for c in ["f_score_z", "z_score_z", "o_score_z"]:
-            df[c] = 1.0
-        for c in ["f_score", "z_score", "o_score", "fwd_ret_1m", "fwd_ret_demeaned"]:
+            df[c] = rng.normal(size=len(df))
+        for c in ["f_score", "z_score", "o_score"]:
             df[c] = 0.5
+        df["fwd_ret_1m"] = rng.normal(0, 0.02, len(df))
+        df["fwd_ret_demeaned"] = 0.0
         df["sector"] = "Technology"
         return df
 
@@ -189,20 +193,64 @@ def test_screen_writes_a_panel_and_no_backtest_artifacts(tmp_path, monkeypatch):
     monkeypatch.setattr(type(INDIA), "tickers", lambda self: tickers)
     monkeypatch.setattr(type(INDIA), "sectors", lambda self: pd.Series("Technology", index=tickers))
 
-    uni = replace(
-        INDIA, start="2025-01-01", end="2025-03-31",
+    return replace(
+        INDIA, start="2025-01-01", end=(dates[-1] + pd.DateOffset(days=1)).strftime("%Y-%m-%d"),
+        n_buckets=5,
         panel_path=tmp_path / "panel.parquet",
         bucket_returns_path=tmp_path / "returns.parquet",
         coefs_path=tmp_path / "coefs.parquet",
         validation_path=tmp_path / "validation.csv",
         rolling_path=tmp_path / "rolling.parquet",
     )
+
+
+def test_screen_writes_panel_and_bucket_returns_but_no_lasso_or_validation(tmp_path, monkeypatch):
+    """run_screen produces the scores panel AND a bucket-return series (the
+    rolling chart is built from it), but never LASSO coefficients or a
+    Newey-West/Deflated-Sharpe validation table — a single point estimate
+    over a handful of independent fundamental updates is not a test, and a
+    table of t-stats sitting next to the US/Korea ones would misrepresent
+    that. This is the contract FINDINGS.md documents for India."""
+    import screener.backtest as bt
+
+    uni = _run_screen_fixture(tmp_path, monkeypatch, n_months=6)
     bt.run_screen(uni)
 
     assert uni.panel_path.exists()
-    for should_not_exist in (uni.bucket_returns_path, uni.coefs_path,
-                             uni.validation_path, uni.rolling_path):
+    assert uni.bucket_returns_path.exists()
+    for should_not_exist in (uni.coefs_path, uni.validation_path):
         assert not should_not_exist.exists(), f"{should_not_exist.name} must not be written"
+
+
+def test_screen_rolling_spread_written_when_enough_months_exist(tmp_path, monkeypatch, caplog):
+    """With more months than the rolling window, run_screen also writes the
+    rolling-spread parquet the dashboard reads, carrying the DSR-derived
+    band exactly like the US/Korea artifacts — and logs a warning that this
+    is a shape diagnostic, not a statistical test."""
+    import logging
+
+    import screener.backtest as bt
+
+    uni = _run_screen_fixture(tmp_path, monkeypatch, n_months=30)
+    with caplog.at_level(logging.WARNING):
+        bt.run_screen(uni)
+
+    assert uni.rolling_path.exists()
+    roll = pd.read_parquet(uni.rolling_path)
+    assert {"ann_spread", "dsr_lo", "dsr_hi"} <= set(roll.columns)
+    assert any("shape diagnostic, not a statistical test" in r.message for r in caplog.records)
+
+
+def test_screen_rolling_spread_skipped_when_too_few_months(tmp_path, monkeypatch):
+    """A 2-month spread series can't feed rolling() at all (nothing to
+    roll) — no rolling artifact should be written rather than an
+    all-NaN one."""
+    import screener.backtest as bt
+
+    uni = _run_screen_fixture(tmp_path, monkeypatch, n_months=2)
+    bt.run_screen(uni)
+
+    assert not uni.rolling_path.exists()
 
 
 def test_screen_composite_is_equal_weight_not_fitted(tmp_path, monkeypatch):
@@ -238,3 +286,32 @@ def test_screen_composite_is_equal_weight_not_fitted(tmp_path, monkeypatch):
                   panel_path=tmp_path / "p.parquet")
     panel = bt.run_screen(uni)
     assert (panel["composite_score"] == 2.0).all()   # mean(1, 2, 3), no fitted weights
+
+
+def test_fig_rolling_labels_non_backtestable_charts_as_descriptive():
+    """The India rolling chart must be visually distinguishable from the
+    US/Korea ones — a viewer skimming tabs should not mistake 3 points for
+    a validated result. backtestable=False must add the warning label,
+    the annotation, and markers on the sparse points; the US/Korea charts
+    (backtestable=True, the default) must be unaffected."""
+    import pandas as pd
+
+    from dashboard.app import fig_rolling
+
+    idx = pd.date_range("2025-01-31", periods=3, freq="ME")
+    roll = pd.DataFrame({
+        "ann_spread": [0.01, 0.03, 0.02], "lo": [-0.1, -0.09, -0.1], "hi": [0.12, 0.15, 0.14],
+        "dsr_lo": [-0.18, -0.19, -0.18], "dsr_hi": [0.18, 0.19, 0.18],
+    }, index=idx)
+
+    sparse = fig_rolling(roll, "india", backtestable=False)
+    assert "descriptive only" in sparse.layout.title.text
+    assert "not a test" in sparse.layout.title.text
+    assert len(sparse.layout.annotations) == 1
+    assert "3" in sparse.layout.annotations[0].text
+    assert sparse.data[-1].mode == "lines+markers"   # sparse points must be visible, not just a line
+
+    normal = fig_rolling(roll, "sp500")   # backtestable defaults to True
+    assert "descriptive only" not in normal.layout.title.text
+    assert len(normal.layout.annotations) == 0
+    assert normal.data[-1].mode == "lines"

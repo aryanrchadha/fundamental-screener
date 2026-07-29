@@ -601,6 +601,40 @@ its headline configuration. That distinction only becomes visible with a
 DSR-derived band; a plain SE band flags 11% of Korean and 7% of US windows
 and obscures it.
 
+### India: the same chart, produced deliberately against the odds, and barely a chart at all
+
+India is registered `backtestable=False` precisely because its source
+supports too few independent cross-sections for inference — so this chart
+was not built by default the way the US and Korean ones were. It exists
+because it was explicitly requested with the 24-month window kept for
+consistency, over the alternative of a shorter window or no chart at all,
+and the numbers below are the direct consequence of that choice.
+
+India has **27 monthly cross-sections total**. A 24-month rolling window
+therefore produces exactly **3 windows** (April, May, June 2026), and any
+two of them share 23 of their 24 months — 96% overlap. This is not
+"limited data" in the way Korea's 82 windows or the US's 144 are limited;
+it is close to the smallest number of windows a rolling chart can show at
+all (2 would be the minimum to draw a line).
+
+| Window ending | Ann. spread | DSR-95% band | Plain SE band |
+|---|---|---|---|
+| 2026-04 | +0.7% | ±17.9% | ±12.7% |
+| 2026-05 | +3.8% | ±18.6% | ±12.6% |
+| 2026-06 | +2.3% | ±17.9% | ±12.4% |
+
+All three points sit far inside both bands — nowhere close to clearing
+either. That is at least consistent with the descriptive full-sample
+number reported earlier in this memo (+2.1%/yr, naive t +0.34, marked as
+not a test): three overlapping snapshots of the same underlying series
+agreeing with its own average is expected, not informative. It would be a
+mistake to read "3 points near zero" as either confirming or decaying
+anything — there is no earlier period in the data for the effect to have
+decayed FROM. The chart is shown (dashboard, `--universe india`, "Rolling
+spread" tab) with an on-chart warning stating the window count and pointing
+back here, rather than either being withheld or presented to match the
+US/Korea charts' visual weight.
+
 ## Survivorship correction, run for both backtestable universes
 
 Both markets were re-run with each rebalance restricted to names actually
@@ -707,11 +741,16 @@ source physically cannot express one. Look-ahead is prevented;
 restatement-blindness is not. Yahoo also supplies only ~5 annual periods,
 leaving three broad annual cross-sections after the year-on-year deltas.
 India is therefore registered with `backtestable=False`: `run_screen()`
-writes the scores panel and stops, and no validation table is produced.
-The quantitative justification — a 0.998 median month-to-month rank
-correlation and an effective sample nearer 3 than 26 — is in the
-cross-market summary at the top of this memo, alongside India's
-descriptive spread.
+writes the scores panel, a bucket-return series, and — since enough months
+exist to fill one 24-month window — a rolling-spread chart, but no LASSO
+coefficients and no Newey-West/Deflated-Sharpe validation table. The
+bucket returns and rolling chart are computed and shown deliberately (see
+the rolling-decay section above for the 3-window result), but every place
+they appear is labeled descriptive rather than inferential. The
+quantitative justification for withholding the validation table — a 0.998
+median month-to-month rank correlation and an effective sample nearer 3
+than 26 — is in the cross-market summary at the top of this memo, alongside
+India's descriptive spread.
 
 ## Bottom line
 

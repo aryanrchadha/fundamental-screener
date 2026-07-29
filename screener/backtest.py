@@ -155,19 +155,31 @@ decile_return_series = bucket_return_series  # back-compat alias
 
 
 def run_screen(universe: Universe | str = "india", db_path=None) -> pd.DataFrame:
-    """Score a universe cross-sectionally WITHOUT computing a return series.
+    """Score a universe cross-sectionally, without the LASSO fit or the
+    Newey-West/Deflated-Sharpe validation table.
 
-    For markets whose data cannot support inference (`backtestable=False`).
-    India's source yields ~3 usable annual cross-sections, which is enough
-    to rank companies and nowhere near enough for Newey-West/Deflated-Sharpe
-    statistics — so this writes the scores panel and stops, rather than
-    producing bucket returns and a validation table that would look like
-    evidence.
+    For markets whose data cannot support full inference
+    (`backtestable=False`). India's source yields ~3 independent annual
+    fundamental updates spread across 27 monthly cross-sections — enough to
+    rank companies, and enough for a rolling spread CHART to plot something,
+    but nowhere near enough for a summary table of test statistics that
+    would look like evidence a stricter reader could not distinguish from
+    the US/Korea tables.
 
     The composite here is the documented EQUAL-WEIGHT prior, not a LASSO
     fit: fitting three coefficients on ~3 independent fundamental
     cross-sections would be fitting noise, and the resulting weights would
     carry a precision the data does not have.
+
+    What this DOES still compute, and what it deliberately does not:
+      * scores panel               — yes, this is the screen itself
+      * bucket (D1..DN) returns    — yes, and the rolling spread chart
+        built from them, both explicitly labeled descriptive/exploratory
+        rather than inferential wherever they are displayed
+      * LASSO coefficients         — no; see the equal-weight note above
+      * Newey-West / DSR summary   — no; a single point estimate over ~3
+        independent updates is not a test, and a table of t-stats and DSR
+        values sitting next to the US/Korea ones would misrepresent that
     """
     if isinstance(universe, str):
         universe = get_universe(universe)
@@ -194,6 +206,44 @@ def run_screen(universe: Universe | str = "india", db_path=None) -> pd.DataFrame
     )
     panel.reset_index().to_parquet(universe.panel_path)
     log.info("Saved screen panel (%d rows) to %s", len(panel), universe.panel_path)
+
+    # Bucket returns + rolling spread ARE written for a screener-only
+    # universe (unlike coefficients and the validation table) — a rolling
+    # chart is a diagnostic of shape over time, not a claim of significance,
+    # and every place it is shown is labeled descriptive. See
+    # screener.validation.rolling_spread for the DSR-derived band.
+    dec_rets = bucket_return_series(panel, universe.n_buckets)
+    dec_rets.to_parquet(universe.bucket_returns_path)
+    log.info("Saved screen bucket returns (%d months) to %s",
+             len(dec_rets), universe.bucket_returns_path)
+
+    if "spread" in dec_rets and dec_rets["spread"].notna().any():
+        # Deferred import: screener.validation imports FROM this module
+        # (bucket_return_series, form_buckets), so a module-level import
+        # here would be circular.
+        from screener.validation import rolling_spread
+
+        roll = rolling_spread(dec_rets["spread"].dropna())
+        n_windows = int(roll["ann_spread"].notna().sum())
+        if n_windows > 0:
+            # Only written when at least one window actually materializes —
+            # an all-NaN rolling parquet (fewer months than the window) is
+            # not a useful artifact and would be indistinguishable on disk
+            # from "not computed".
+            roll.to_parquet(universe.rolling_path)
+            log.warning(
+                "%s: rolling spread has only %d window(s) (%d monthly spread "
+                "observations, %d-month window) — this is a shape diagnostic, "
+                "not a statistical test. See FINDINGS.md.",
+                universe.name, n_windows, dec_rets["spread"].notna().sum(),
+                config.ROLLING_WINDOW_MONTHS,
+            )
+        else:
+            log.info(
+                "%s: %d monthly spread observations is fewer than the "
+                "%d-month rolling window — no rolling spread artifact written",
+                universe.name, dec_rets["spread"].notna().sum(), config.ROLLING_WINDOW_MONTHS,
+            )
     return panel
 
 
@@ -267,8 +317,11 @@ def main() -> None:
         print(f"As of {latest:%Y-%m-%d}: {len(xsec)} of {panel.loc[latest].shape[0]} names scored")
         print(f"Panel: {len(panel):,} rows across "
               f"{panel.index.get_level_values('as_of_date').nunique()} dates")
-        print(f"\nNo backtest is run for {uni.name}: its source supports too few "
-              f"independent\ncross-sections for return-series inference. "
+        print(f"\nNo Newey-West/Deflated-Sharpe validation table is produced for "
+              f"{uni.name}: its source\nsupports too few independent cross-sections "
+              f"for that kind of inference. A bucket-return\nseries and rolling "
+              f"spread chart ARE computed as descriptive/exploratory diagnostics —\n"
+              f"see FINDINGS.md before reading anything into them. "
               f"View with `python -m dashboard.app --universe {uni.name}`.")
         return
 

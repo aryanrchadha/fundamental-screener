@@ -81,7 +81,7 @@ def fig_f_scatter(panel: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def fig_rolling(roll: pd.DataFrame, universe_name: str = "") -> go.Figure:
+def fig_rolling(roll: pd.DataFrame, universe_name: str = "", backtestable: bool = True) -> go.Figure:
     # Neutral title on purpose: the chart reports what the data shows,
     # including decay if that is what it shows.
     fig = go.Figure()
@@ -103,14 +103,26 @@ def fig_rolling(roll: pd.DataFrame, universe_name: str = "") -> go.Figure:
     fig.add_trace(go.Scatter(x=roll.index, y=roll["lo"], fill="tonexty",
                              fillcolor="rgba(31,119,180,0.15)", line=dict(width=0),
                              name="±1.96 SE band (descriptive)"))
+    mode = "lines+markers" if not backtestable else "lines"
     fig.add_trace(go.Scatter(x=roll.index, y=roll["ann_spread"], name="Annualized spread",
-                             line=dict(color="rgb(31,119,180)", width=2)))
+                             mode=mode, line=dict(color="rgb(31,119,180)", width=2)))
     fig.add_hline(y=0, line_dash="dot")
     title = f"Rolling {config.ROLLING_WINDOW_MONTHS}-Month Spread (annualized)"
     if universe_name:
         title += f" — {universe_name}"
+    if not backtestable:
+        title += "  [descriptive only — see note below, not a test]"
     fig.update_layout(title=title, yaxis_tickformat=".0%", height=520,
                       legend=dict(orientation="h", y=-0.15))
+    if not backtestable:
+        n = int(roll["ann_spread"].notna().sum())
+        fig.add_annotation(
+            text=(f"Only {n} overlapping {config.ROLLING_WINDOW_MONTHS}-month window(s) exist for "
+                  f"this universe (its full history is barely longer than one window). "
+                  f"This is a shape diagnostic, not an inferential result — see FINDINGS.md."),
+            xref="paper", yref="paper", x=0.5, y=1.08, showarrow=False,
+            font=dict(size=12, color="#a05a00"), align="center",
+        )
     return fig
 
 
@@ -129,18 +141,25 @@ def build_app(universe="sp500") -> Dash:
     )
 
     def _unavailable(view: str) -> html.Div:
-        """Shown instead of a backtest view the data cannot support."""
+        """Shown instead of a specific backtest artifact this universe's
+        data does not support. Kept generic to `view` rather than claiming
+        blanket unavailability: a screener-only universe like India still
+        produces bucket returns and a rolling chart (labeled descriptive
+        wherever they render) — what it withholds specifically is the
+        Newey-West/Deflated-Sharpe validation table, since a single point
+        estimate over a handful of independent updates is not a test."""
         return html.Div(style={"padding": "2em", "background": "#fff8e1",
                                "border": "1px solid #e0c060", "marginTop": "1em"},
                         children=[
             html.H4(f"{view} is not available for {uni.name}"),
-            html.P(f"No backtest is run for this universe. Its source supports too "
-                   f"few independent cross-sections for a return series to mean "
-                   f"anything, so no bucket returns, rolling spread or "
-                   f"Newey-West / Deflated-Sharpe table are produced."),
-            html.P("Showing an empty or placeholder chart here would imply evidence "
-                   "that does not exist. The screener table, sector heatmap and "
-                   "F-Score scatter are built from the scores panel and are real."),
+            html.P(f"This universe's source supports too few independent "
+                   f"cross-sections for {view.lower()} to mean anything as a "
+                   f"statistical result, so it is not produced here."),
+            html.P("Showing an empty or placeholder version would imply evidence "
+                   "that does not exist. Other views on this universe that ARE "
+                   "real — the screener table, sector heatmap, F-Score scatter, "
+                   "and (where present) bucket returns and rolling spread, each "
+                   "labeled descriptive rather than inferential — remain available."),
         ])
 
     tabs = [
@@ -155,7 +174,7 @@ def build_app(universe="sp500") -> Dash:
             else _unavailable("Bucket returns")]),
         dcc.Tab(label="F-Score scatter", children=[dcc.Graph(figure=fig_f_scatter(panel))]),
         dcc.Tab(label="Rolling spread", children=[
-            dcc.Graph(figure=fig_rolling(roll, uni.name)) if roll is not None
+            dcc.Graph(figure=fig_rolling(roll, uni.name, uni.backtestable)) if roll is not None
             else _unavailable("Rolling spread")]),
         dcc.Tab(label="Validation", children=(
             [html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),
