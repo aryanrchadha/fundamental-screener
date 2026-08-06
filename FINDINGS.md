@@ -1,11 +1,11 @@
 # FINDINGS — Composite Fundamental Screener
 
-*Research memo covering three markets — the S&P 500 (SEC EDGAR), the KOSPI
-120 (Korea's DART), and the BSE 100 (India) — plus survivorship-corrected
-re-runs of the two that support a backtest. Scores are sector-neutral
-z-scores; buckets are equal-weight; the spread is the top bucket minus the
-bottom. All fundamentals are point-in-time, gated by the real filing date
-in every market.*
+*Research memo covering four markets — the S&P 500 and the broader Russell
+3000 (both SEC EDGAR), the KOSPI 120 (Korea's DART), and the BSE 100
+(India) — plus survivorship-corrected re-runs of the three that support a
+backtest. Scores are sector-neutral z-scores; buckets are equal-weight; the
+spread is the top bucket minus the bottom. All fundamentals are
+point-in-time, gated by the real filing date in every market.*
 
 ## Cross-market summary
 
@@ -16,6 +16,7 @@ bottom bucket:
 |---|---|---|---|---|---|---|---|
 | **US** — S&P 500 | 503 | deciles | 167 | −0.7% | −0.29 | 0.092 | **No** |
 | US, survivorship-corrected | 294→493 | deciles | 167 | −1.3% | −0.42 | 0.067 | **No** |
+| **US** — Russell 3000 (top 300) | 300 | deciles | 167 | +0.4% | +0.10 | 0.170 | **No** |
 | **Korea** — KOSPI 120 | 120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** |
 | Korea, survivorship-corrected | 107→120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** (identical) |
 | **India** — BSE 100 | 100 | quintiles | 26 † | +2.1% † | +0.34 † | 0.233 † | **No** † |
@@ -39,7 +40,7 @@ so India neither strengthens nor weakens the finding. `screener/backtest.py`
 still refuses to emit a validation table for India (`backtestable=False`),
 and the dashboard still hides the views that would depend on one.
 
-**Read across the table: five market-configurations, zero survivors.**
+**Read across the table: six market-configurations, zero survivors.**
 
 ## Validation summary — S&P 500 (the primary sample)
 
@@ -227,6 +228,102 @@ constructed example.
 6. **Total liabilities fallback** (Assets − StockholdersEquity) puts
    noncontrolling interests into liabilities, slightly overstating leverage
    for consolidated groups.
+
+## US extension: Russell 3000 (same taxonomy, mostly the same names)
+
+The S&P 500 result above is a large-cap-only sample by construction. Before
+reaching for a second regulator, the more direct question is whether the
+same US-GAAP taxonomy and the same scoring functions find anything
+different in a wider, less mega-cap-concentrated US universe. `--universe
+russell3000` answers that without introducing a new data source or a new
+accounting standard: same SEC EDGAR/us-gaap facts, same
+`screener/scores.py` functions, same 2012–2025 date range and monthly
+rebalance — only the ticker list changes, sourced from BlackRock's IWV ETF
+holdings (the standard free proxy for Russell 3000 membership, since the
+licensed FTSE Russell constituent file is a commercial product). The
+committed run caps the universe to the **top 300 names by index weight**
+(`config.RUSSELL3000_MAX_TICKERS`); nothing downstream assumes the cap.
+
+**Coverage.** 300 tickers ingested (650,339 fact rows), 187 of 297 names
+fully scored in the latest cross-section — 297, not 300, because three
+tickers' EDGAR companyfacts came back empty or near-empty (a recently
+listed name with no historical XBRL yet is the typical cause). Exclusion
+counts mirror the S&P 500 pattern exactly: Piotroski excludes the most
+(108/297, driven by the same `GrossProfit`/`CostOfRevenue` coverage gap),
+Altman and Ohlson fewer (62/297 and 57/297).
+
+| Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat | Skew | Kurtosis | DSR | Survives 95%? |
+|---|---|---|---|---|---|---|---|
+| Piotroski F-Score | −4.2% | −0.32 | −1.14 | −0.87 | 6.57 | 0.011 | **No** |
+| Altman Z-Score | −4.4% | −0.40 | −1.58 | −0.24 | 2.91 | 0.005 | **No** |
+| Ohlson O-Score | −7.1% | −0.74 | −2.58 | +0.50 | 4.59 | 0.000 | **No** |
+| Composite (LASSO) | +0.4% | +0.03 | +0.10 | −0.40 | 4.59 | 0.170 | **No** |
+
+**The wider universe does not rescue the signal — if anything it sharpens
+the same failure.** The individual scores are directionally identical to
+the S&P 500 table (all three negative, O-Score the worst by a wide margin,
+consistent with distress ranking being contrarian in this sample rather
+than a large-cap-specific artefact). The composite's point estimate is
+closer to flat here (+0.4%/yr vs. the S&P 500's −0.7%/yr) but still carries
+a DSR of 0.170, nowhere near the 0.95 bar, and the annual coefficient
+history shows the identical shrinkage pattern: nonzero, negative F/O
+coefficients through 2018, shrinking to exactly zero for 2019–2022 as the
+CV-selected α jumps an order of magnitude, a small nonzero O-Score
+coefficient returning 2023–2025. The Z-Score coefficient never exceeds
+−0.0006 in magnitude at any refit (effectively zero throughout), the same
+pattern as the S&P 500 — LassoCV finds no stable relationship between
+sector-neutral Altman Z and forward returns in either US universe.
+
+**Decay shape.** 167 months, full-period cumulative composite spread −8.0%
+(vs. the S&P 500's −15.9%), split +3.3% in the first half and −10.9% in the
+second — the same qualitative "no reliable effect, concentrated drawdown"
+pattern as the S&P 500's own first/second-half split, on an independently
+constructed universe with a different, broader set of names. The rolling
+24-month chart (144 of 167 windows populated) shows **0 windows clearing
+the DSR band in either direction** — no false-positive stretch of the kind
+the S&P 500's *survivorship-corrected* run produced (20 of 144 windows
+there, discussed and explicitly not oversold in the rolling-decay section
+below). Mean annualized spread across windows is +0.9%/yr against a median
+±26.2%/yr hurdle; by window-year, small positive spreads 2015–2019
+(+4% to +9%), a return to negative territory in 2021–2022 (−11%/−6%) that
+the S&P 500's own rolling windows do *not* show over the same years
+(+3%/+2%, still positive there) — a genuine divergence between the two US
+universes worth flagging rather than glossing over, though neither reading
+clears the DSR band in either direction — and −22%/−17% in the earliest
+2013–2014 windows, the same short-history-inflates-volatility effect the
+S&P 500's earliest windows show, here on a differently-selected universe
+rather than a coincidence of shared tickers.
+
+**What this run actually tests — stated honestly, because it is less than
+the section title implies.** Checking the two ticker sets directly: **286
+of the 300 Russell 3000 names here are already S&P 500 constituents**; only
+14 are not (`ALAB`, `AU`, `BE`, `EA`, `LNG`, `NET`, `NTRA`, `NU`, `RKLB`,
+`RVMD`, `SNOW`, `SPCX`, `SPOT`, plus Berkshire under its bare-concatenated
+ticker form). Weight-ranking a ~2,580-name free proxy and then capping to
+the top 300 by weight does not, in practice, sample a broader universe —
+it re-selects almost exactly the same mega-caps the S&P 500 already
+contains, because both rankings are dominated by market capitalization.
+**This run therefore does not meaningfully test "is the effect concentrated
+outside the S&P 500's 503 names" — that would require sampling by name
+count or including the smaller Russell 3000 constituents the weight cap
+excludes, which remains untested.** What it does show, more modestly: an
+independently constructed universe (different source, different sector
+labels, a different tie-breaking process for the handful of non-overlapping
+names) that is 95% the same companies reproduces the same result to within
+noise — a consistency check on the pipeline and the finding's robustness to
+universe-construction detail, not a test of whether the effect lives in
+smaller US names. Falsifying the "just the S&P 500" hypothesis properly
+would need `config.RUSSELL3000_MAX_TICKERS = None` (or a materially higher
+cap) run against the genuinely non-overlapping mid/small-cap tail — left as
+future work, and flagged here rather than implied by this run's title.
+
+**What it does not establish either**: survivorship correction. Unlike the
+S&P 500's Wikipedia constituent-changes table, there is no free historical
+Russell reconstitution feed, so `Russell3000Universe.membership()` always
+returns `None` — this run is silently subject to the same look-ahead risk
+Wikipedia's table (imperfectly) mitigates for the S&P 500, and that
+limitation is left explicit rather than worked around with fabricated
+membership dates.
 
 ## International extension (Brazil / B3): what was proven and what wasn't
 
@@ -752,6 +849,44 @@ median month-to-month rank correlation and an effective sample nearer 3
 than 26 — is in the cross-market summary at the top of this memo, alongside
 India's descriptive spread.
 
+## Scoped but not built: China / SSE-SZSE
+
+A fifth market was researched against the same standard used to decide
+whether to build Brazil, Korea, and India — free, structured, and capable
+of a genuine per-fact *filing* date, not just fiscal period end — and,
+unlike those three, China did not clear that bar, so no adapter was built.
+
+Neither CSRC, SSE, nor SZSE publish a bulk structured statement API. The
+CSRC-mandated disclosure portal, cninfo.com.cn, is the closest analog to
+EDGAR/CVM/DART but is PDF-based: real announcement timestamps, no
+structured line items — structurally identical to India's BSE half.
+**Tushare Pro**'s statement endpoints genuinely return a real filing date
+(`ann_date`/`f_ann_date`) alongside full structured data, the closest
+DART-equivalent found, but reaching them needs 2,000 points — in practice
+a paid donation or heavy community-contribution activity, not free
+registration, failing the same bar this project already applies to FMP's
+optional key (degrade gracefully, never require payment). **AKShare**
+wraps Eastmoney for free structured statements (keyed by period end, not a
+filing date) and separately wraps cninfo for free real announcement
+timestamps (PDF only) — a join in principle, India-style, but unverified
+against real filings the way India's BSE+Yahoo join was (387/387
+accounting-identity checks) before it was trusted enough to build.
+**Baostock** is free, no key, and its `query_*` functions return a
+genuinely separate `pubDate` (disclosure) vs. `statDate` (period end) — the
+most defensibly free-and-dated option found — but it returns precomputed
+*ratios*, not the raw `Assets`/`Liabilities`/`NetIncomeLoss`-style line
+items `screener/scores.py`'s Piotroski/Altman/Ohlson functions are built
+on; feeding it would mean rewriting the score functions per market, which
+would break this project's central claim that all three scores run
+**unmodified** across every market.
+
+The decision, stated the same way India's PIT weakness was rather than
+silently omitted: build a real adapter later only around an AKShare
+Eastmoney+cninfo join, live-verified against real filings to the same
+standard as the other three adapters — not before, and not with a
+period-end date relabeled as a filing date, which would be exactly the
+kind of PIT-fake the rest of this project's discipline exists to prevent.
+
 ## Bottom line
 
 As a *screener* the artifact works and the infrastructure (the PIT database
@@ -771,20 +906,40 @@ is meaningfully stronger evidence than one, and the honest summary is that
 these scores are a defensible *screen* and a genuinely reusable piece of
 infrastructure, but not, on this evidence, a strategy.
 
-Correcting for survivorship does not rescue it. Re-running both universes
-with each rebalance restricted to names actually listed at the time leaves
-the US conclusion unchanged (individual scores move in both directions,
-none survives) and leaves the Korean result numerically identical, because
-the filing-date gate had already made look-ahead impossible. Adding India
-extends the screen but deliberately not the evidence base: its composite
-ranking has a median month-to-month rank correlation of 0.998 and updates
-on only three annual filings, so its 26 monthly observations carry an
-effective sample nearer 3. Its descriptive spread (+2.1%/yr, naive t
-+0.34) is reported in the cross-market table for completeness and marked
-as not a test.
+The Russell 3000 extension adds a third independent full backtest without
+adding a new regulator or taxonomy — and it is worth being precise about
+what it does and does not show, stated in full in its own section above.
+Because the committed run caps the universe to the top 300 names by index
+weight, 286 of those 300 are already S&P 500 constituents; it is a
+consistency check on the pipeline (an independently constructed,
+95%-overlapping universe reproduces the same failure shape — all four
+strategies fail, O-Score worst, the Z-Score coefficient effectively zero
+at every refit), not a genuine test of whether the null result is specific
+to large-cap names. That test would need the smaller Russell 3000
+constituents the weight cap excludes, and remains open.
 
-Across everything here — **eight strategy-market pairs, two
-survivorship-corrected re-runs, five market-configurations, three
-regulators and three accounting taxonomies — there are zero survivors.**
-That consistency is the result. It is also why the reusable part of this
-project is the point-in-time infrastructure rather than the signal.
+Correcting for survivorship does not rescue it. Re-running the S&P 500 and
+Korea with each rebalance restricted to names actually listed at the time
+leaves the US conclusion unchanged (individual scores move in both
+directions, none survives) and leaves the Korean result numerically
+identical, because the filing-date gate had already made look-ahead
+impossible. The Russell 3000 run has no equivalent correction available —
+no free historical Russell reconstitution feed exists, unlike Wikipedia's
+imperfect-but-real S&P 500 changes table — so that limitation is left
+explicit rather than worked around. Adding India extends the screen but
+deliberately not the evidence base: its composite ranking has a median
+month-to-month rank correlation of 0.998 and updates on only three annual
+filings, so its 26 monthly observations carry an effective sample nearer
+3. Its descriptive spread (+2.1%/yr, naive t +0.34) is reported in the
+cross-market table for completeness and marked as not a test. A fifth
+market, China, was researched and deliberately not built — no free source
+combines structured statements with a genuine filing date without a
+paywall or an unverified join, and the project's PIT discipline treats
+that as disqualifying rather than a gap to paper over.
+
+Across everything here — **twelve strategy-market pairs (three full
+backtestable markets × four strategies), two survivorship-corrected
+re-runs, six market-configurations, three regulators and three accounting
+taxonomies — there are zero survivors.** That consistency is the result.
+It is also why the reusable part of this project is the point-in-time
+infrastructure rather than the signal.

@@ -146,7 +146,7 @@ than assumed:
 So the residual bias is quantified rather than silently corrected with data
 that does not exist. Treat all backtest levels as optimistic.
 
-## US extension: Russell 3000 (broader universe)
+## US extension: Russell 3000 (a consistency check, not yet a broader test — see caveat below)
 
 `--universe russell3000` swaps the ticker source without touching anything
 else — same SEC EDGAR/us-gaap taxonomy, same `screener/scores.py`, same
@@ -194,13 +194,19 @@ recently-listed name with no historical XBRL yet).
 | **Composite (LASSO)** | **+0.4%** | **0.03** | **0.10** | **0.170** | **No** |
 
 Same verdict as the S&P 500 table: nothing survives the four-trial Deflated
-Sharpe correction. The composite's point estimate is closer to flat than
-the S&P 500's (+0.4%/yr vs. −0.7%/yr) and the walk-forward LASSO shrinks
-every score to (near-)zero from 2019 onward exactly as it does in the S&P
-500 run — the broader, more liquidity-diverse universe does not rescue the
-signal. 167 months, first half +3.3% cumulative, second half −10.9%: same
-qualitative decay pattern as the headline result, on an independently
-constructed universe.
+Sharpe correction. **Read this as a consistency check, not a test of a
+broader universe**: checking the ticker sets directly, 286 of these 300
+names are already S&P 500 constituents (weight-ranking a ~2,580-name free
+proxy and capping to the top 300 selects almost the same mega-caps the
+S&P 500 already contains) — only 14 are genuinely different names. The
+composite's point estimate is closer to flat than the S&P 500's (+0.4%/yr
+vs. −0.7%/yr) and the walk-forward LASSO shrinks every score to (near-)zero
+from 2019 onward exactly as it does in the S&P 500 run — an independently
+constructed, 95%-overlapping universe reproduces the same result, not
+evidence about whether the effect lives in the smaller Russell 3000 names
+this cap excludes (see `RUSSELL3000_MAX_TICKERS` — set it higher or to
+`None` to actually test that). 167 months, first half +3.3% cumulative,
+second half −10.9%: same qualitative decay pattern as the headline result.
 
 Rolling 24-month spread (`python -m dashboard.app --universe russell3000` →
 "Rolling spread"): 144 windows, **0 clear the DSR 95% band in either
@@ -632,7 +638,7 @@ python -m screener.backtest                          # scores, composite, bucket
 python -m screener.validation                        # NW t-stats + DSR summary -> console + CSV
 python -m dashboard.app                              # http://localhost:8050
 
-# Russell 3000 (broader US universe, top 300 by weight, deciles)
+# Russell 3000 (top 300 by weight, deciles — see README caveat: mostly overlaps the S&P 500)
 python -m pit_fundamentals.ingest --universe russell3000 --db data/pit_r3k.duckdb
 python -m screener.backtest    --universe russell3000
 python -m screener.validation  --universe russell3000
