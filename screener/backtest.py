@@ -297,7 +297,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Run the bucket backtest for one universe")
-    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi", "india"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "russell3000", "kospi", "india"])
     p.add_argument("--survivorship", action="store_true",
                    help="restrict each rebalance to names actually listed then; "
                         "writes to *_pit outputs so both runs can be compared")
@@ -327,7 +327,15 @@ def main() -> None:
 
     out = run_pipeline(uni)
     uni = out["universe"]
-    dec = out["decile_returns"].dropna(subset=["spread"])
+    dec_rets = out["decile_returns"]
+    if "spread" not in dec_rets.columns:
+        print(f"\n=== {uni.name} bucket backtest: no spread computed ===")
+        print(f"No rebalance date had both D{uni.n_buckets} and D1 populated — every "
+              f"cross-section fell short of MIN_NAMES_PER_BUCKET ({config.MIN_NAMES_PER_BUCKET}) "
+              f"x {uni.n_buckets} buckets. Ingest more names (see --limit on "
+              f"pit_fundamentals.ingest) before running the backtest.")
+        return
+    dec = dec_rets.dropna(subset=["spread"])
     full = (1 + dec["spread"]).prod() - 1
     half = len(dec) // 2
     first = (1 + dec["spread"].iloc[:half]).prod() - 1

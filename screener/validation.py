@@ -260,7 +260,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Newey-West + Deflated Sharpe validation")
-    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "russell3000", "kospi"])
     p.add_argument("--survivorship", action="store_true")
     args = p.parse_args()
     uni = get_universe(args.universe)

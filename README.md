@@ -146,6 +146,78 @@ than assumed:
 So the residual bias is quantified rather than silently corrected with data
 that does not exist. Treat all backtest levels as optimistic.
 
+## US extension: Russell 3000 (broader universe)
+
+`--universe russell3000` swaps the ticker source without touching anything
+else — same SEC EDGAR/us-gaap taxonomy, same `screener/scores.py`, same
+2012–2025 date range, its own database (`data/pit_r3k.duckdb`) and output
+paths so a run never collides with the S&P 500 one. There is no free,
+direct Russell-index constituent feed (FTSE Russell licenses that data), so
+`screener.universe.get_russell3000_constituents()` uses BlackRock's IWV ETF
+— built to track the Russell 3000 as closely as possible — and reads its
+full daily holdings CSV (no key, no login): confirmed live, ~2,580 equity
+holdings with ticker, name, sector, and index weight. This is standard
+practice in quant research (ETF replication holdings as an index-membership
+proxy) precisely because the licensed constituent file is a commercial
+product — documented here as an approximation, not the real thing.
+
+```bash
+python -m pit_fundamentals.ingest --universe russell3000 --db data/pit_r3k.duckdb
+python -m screener.backtest    --universe russell3000
+python -m screener.validation  --universe russell3000
+python -m dashboard.app        --universe russell3000
+```
+
+The committed run caps the universe to the **top 300 names by index
+weight** (`config.RUSSELL3000_MAX_TICKERS`, set to `None` for the full
+~2,580) — a runtime tradeoff, not a pipeline limitation; nothing downstream
+assumes the cap. This surfaced a real ticker-format mismatch worth flagging
+for anyone using IWV as a constituent source elsewhere: EDGAR's ticker→CIK
+map keys dual-class shares with a dash (`BRK-B`), but IWV's raw holdings CSV
+serves the same ticker with no separator at all (`BRKB`) — neither of the
+project's existing dash-only fallbacks caught that (one strips the input's
+dash, but the map's key still has one), so `pit_fundamentals/ingest.py` now
+resolves through a dash-**agnostic** index built once per ingest, confirmed
+against EDGAR's live `company_tickers.json` (`BRKB` → CIK 0001067983, same
+CIK `BRK-B` resolves to).
+
+Live-verified end-to-end: 300 tickers, 650,339 fact rows ingested, 187/297
+names fully scored in the latest cross-section (297, not 300, because three
+tickers' EDGAR companyfacts came back empty or near-empty — e.g. a
+recently-listed name with no historical XBRL yet).
+
+| Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat | DSR | Survives 95%? |
+|---|---|---|---|---|---|
+| Piotroski F-Score | −4.2% | −0.32 | −1.14 | 0.011 | No |
+| Altman Z-Score | −4.4% | −0.40 | −1.58 | 0.005 | No |
+| Ohlson O-Score | −7.1% | −0.74 | −2.58 | 0.000 | No |
+| **Composite (LASSO)** | **+0.4%** | **0.03** | **0.10** | **0.170** | **No** |
+
+Same verdict as the S&P 500 table: nothing survives the four-trial Deflated
+Sharpe correction. The composite's point estimate is closer to flat than
+the S&P 500's (+0.4%/yr vs. −0.7%/yr) and the walk-forward LASSO shrinks
+every score to (near-)zero from 2019 onward exactly as it does in the S&P
+500 run — the broader, more liquidity-diverse universe does not rescue the
+signal. 167 months, first half +3.3% cumulative, second half −10.9%: same
+qualitative decay pattern as the headline result, on an independently
+constructed universe.
+
+Rolling 24-month spread (`python -m dashboard.app --universe russell3000` →
+"Rolling spread"): 144 windows, **0 clear the DSR 95% band in either
+direction** — no false-positive stretch the way the survivorship-corrected
+US run shows. Mean annualized spread +0.9%/yr against a median ±26.2%/yr
+band; by window-year, mid-single-digit positive spreads 2015–2019, a dip to
+−22%/−17% in the 2013–2014 windows (the same short-history-inflates-vol
+effect the S&P 500 chart shows in its own early years), and −11%/−6% in the
+2021–2022 windows.
+
+**What this does not add**: no survivorship correction (`.corrected()` is
+supported by the `Universe` interface, but `Russell3000Universe.membership()`
+always returns `None` — there is no free historical Russell reconstitution
+feed, unlike Wikipedia's imperfect-but-real S&P 500 changes table, so
+claiming a correction here would be fabricating data that does not exist,
+not correcting for its absence).
+
 ## International extension: Brazil / B3 (proof of concept)
 
 `pit_fundamentals` supports a second taxonomy end-to-end: Brazil's CVM
@@ -448,6 +520,53 @@ scoreable years after year-on-year deltas — **enough for a screener, too
 short for a backtest**, which is why India is not registered as a backtest
 universe.
 
+## Scoped but not built: China / SSE-SZSE
+
+A fifth market was researched with the same standard applied to Brazil,
+Korea, and India — build only if a real free source supports it — and,
+unlike those three, **China does not clear that bar**, so no adapter exists
+here. What was checked:
+
+- **CSRC / SSE / SZSE** publish no bulk structured financial-statement API.
+  **cninfo.com.cn** (巨潮资讯网), the CSRC-mandated disclosure portal, is the
+  closest analog to EDGAR/CVM/DART — but it is fundamentally PDF-based: its
+  query endpoint returns real announcement timestamps and a PDF link, no
+  structured line items. Structurally identical to India's BSE half: a real
+  date, zero structured values.
+- **Tushare Pro**'s `income`/`balancesheet`/`cashflow` endpoints genuinely
+  return `ann_date`/`f_ann_date` (a real PIT-capable filing date) alongside
+  full structured statements — the closest thing to a Korea/DART-style
+  source found. But reaching those endpoints needs 2,000 points, which in
+  practice means a paid donation or heavy community-contribution activity,
+  not free registration (120 points, insufficient) — so it fails the same
+  bar FMP's optional key already respects (degrade gracefully, never
+  require payment).
+- **AKShare** wraps Eastmoney for full structured statements (keyed by
+  period end, not a filing date) and separately wraps cninfo for real
+  announcement timestamps (PDF-only) — two disconnected free, no-key
+  interfaces that could in principle be joined the way India's adapter
+  joins BSE dates to Yahoo values. Unverified: no live check was run
+  against real filings the way India's join was (387/387 accounting-identity
+  checks) before it was trusted enough to build.
+- **Baostock** is free, no key, and its `query_*` functions return a
+  genuinely separate `pubDate` (disclosure) vs. `statDate` (period end) —
+  a real, if narrow, PIT signal, and the most defensibly free-and-dated
+  option found. Its ceiling is what it returns: precomputed *ratios*
+  (ROE, margins, current/quick ratio, YoY growth), not raw line items
+  (`Assets`, `Liabilities`, `NetIncomeLoss`, ...). `screener/scores.py`'s
+  Piotroski/Altman/Ohlson functions are built on raw balance-sheet and
+  income-statement figures — a ratio-only source cannot feed them without
+  rewriting the score functions themselves, which would break the
+  project's central claim that all three scores run **unmodified** across
+  every market.
+
+**Verdict**: build a real adapter later only around an AKShare
+Eastmoney+cninfo join, live-verified against real filings to the same
+standard India's BSE+Yahoo join was (before that verification, it is not
+more trustworthy than assuming). Do not build a PIT-fake adapter that
+tags period-end dates as filing dates — the entire point of this project's
+PIT discipline is that the two are not interchangeable.
+
 ## Setup
 
 ```bash
@@ -465,6 +584,45 @@ export SEC_USER_AGENT="fundamental-screener your.email@example.com"
 Optional: `export FMP_API_KEY=...` enables the FMP gap-fill fallback; the
 pipeline runs fully without it.
 
+**For the Korea universe**, `export DART_API_KEY=...` is not optional — DART
+requires it on every call, including the free company-code list (unlike
+FMP, there is no code path that runs without it). Getting one:
+
+1. Go to <https://opendart.fss.or.kr> and register an account (free; the
+   site is Korean-language but a browser translator handles it fine).
+2. Under "인증키 신청/관리" ("API key request/management"), request a key.
+   Approval is typically near-instant.
+3. `export DART_API_KEY="your_40_char_key"` — never commit it. It is read
+   only from the environment (`pit_fundamentals/dart_kr_client.py`'s
+   `require_api_key()`); nothing in this codebase writes it to a file, and
+   `data/` (where the HTTP cache lives) is gitignored regardless.
+
+If the variable is unset, `--taxonomy dart-kr` fails immediately with an
+actionable error rather than silently skipping Korea — check with:
+
+```bash
+python -c "from pit_fundamentals.dart_kr_client import require_api_key; require_api_key()"
+```
+
+**Re-ingesting Korea after an interruption.** Unlike the US EDGAR path
+(which keeps an `ingest_log` table and skips already-loaded CIKs),
+`run_dart_ingest` has no per-company skip-log — every re-run iterates over
+all 120 companies again. What makes re-running cheap anyway is the HTTP
+cache: every DART response (financials, share counts, filing dates) is
+cached to `data/http_cache` with a 30-day TTL, so a company that completed
+on a prior run is served from disk, not the network, on the next one. In
+practice that means: first cold run ≈ 20 minutes for all 120 companies ×
+9 years (down from 152 minutes before the filing-index and concurrency
+fixes — see `dart_kr_client.py`'s module docstring); a re-run after an
+interruption or crash only pays network cost for the companies that hadn't
+finished, typically seconds to a couple of minutes depending on how far the
+first run got. `data/http_cache.sqlite` is **shared across all four
+taxonomies** (EDGAR, CVM, DART, BSE) and grows large (~2GB after a full
+ingest of all four markets), so deleting it to force a fresh Korea pull
+also invalidates the US/Brazil/India caches — fine if you're re-ingesting
+everything, wasteful if you only want fresher Korean data. `requests_cache`
+supports per-URL cache clearing if you need to be surgical about it.
+
 ## Run
 
 ```bash
@@ -473,6 +631,12 @@ python -m pit_fundamentals.ingest --universe sp500   # ~30 min first run (rate-l
 python -m screener.backtest                          # scores, composite, buckets -> data/*.parquet
 python -m screener.validation                        # NW t-stats + DSR summary -> console + CSV
 python -m dashboard.app                              # http://localhost:8050
+
+# Russell 3000 (broader US universe, top 300 by weight, deciles)
+python -m pit_fundamentals.ingest --universe russell3000 --db data/pit_r3k.duckdb
+python -m screener.backtest    --universe russell3000
+python -m screener.validation  --universe russell3000
+python -m dashboard.app        --universe russell3000
 
 # South Korea (KOSPI 120, quintiles) — needs DART_API_KEY
 python -m pit_fundamentals.ingest --taxonomy dart-kr --years 2015 2016 2017 2018 2019 2020 2021 2022 2023

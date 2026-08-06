@@ -122,6 +122,25 @@ def test_all_three_universes_have_distinct_paths():
         assert len(paths) == 3, f"{attr} collides across universes"
 
 
+def test_russell3000_is_registered_backtestable_and_path_distinct():
+    """Russell 3000 shares the S&P 500's taxonomy and date range but must
+    write to its own database/output paths so a run of one never clobbers
+    the other, and it must remain a full backtestable universe (unlike
+    India) since its source (SEC EDGAR) supports proper return-series
+    inference just like the S&P 500 does."""
+    from screener.universes import INDIA, RUSSELL3000
+
+    assert get_universe("russell3000") is RUSSELL3000
+    assert RUSSELL3000.backtestable is True
+    assert RUSSELL3000.currency == "USD"
+    assert RUSSELL3000.membership() is None   # no free historical Russell membership feed
+
+    for attr in ("db_path", "prices_cache", "panel_path", "bucket_returns_path",
+                 "coefs_path", "validation_path", "rolling_path"):
+        paths = {getattr(u, attr) for u in (SP500, KOSPI, INDIA, RUSSELL3000)}
+        assert len(paths) == 4, f"{attr} collides across universes"
+
+
 def test_dashboard_renders_without_backtest_artifacts(tmp_path, monkeypatch):
     """The dashboard must degrade honestly: with no bucket returns,
     validation table or rolling spread on disk, it still builds, and the

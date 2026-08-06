@@ -57,6 +57,69 @@ def get_sp500_constituents() -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
+IWV_HOLDINGS_URL = (
+    "https://www.ishares.com/us/products/239714/"
+    "ishares-russell-3000-etf/latest-holdings.csv"
+)
+
+
+def get_russell3000_constituents() -> pd.DataFrame:
+    """Russell 3000 proxy: current holdings of iShares' IWV ETF.
+
+    There is no free, direct Russell-index constituent feed — FTSE Russell
+    licenses that data. IWV is BlackRock's ETF built to track the Russell
+    3000 as closely as possible, and it publishes its full daily holdings
+    as a CSV with no key, login, or rate limit (confirmed live: the file at
+    this URL returns real current holdings — ticker, name, BlackRock's own
+    GICS-style sector, and weight — for ~2,580 equity constituents,
+    refreshed daily). Using ETF replication holdings as an index-membership
+    proxy is standard practice in quant research precisely because true
+    index constituent files are commercial products; it is an
+    approximation, not the licensed list, and is documented as such.
+
+    The file's first several lines are fund metadata (inception date,
+    shares outstanding, ...) before the real `Ticker,Name,Sector,...`
+    header — those are skipped. Non-equity holdings (cash, money-market,
+    index futures used for cash-drag management — small residuals
+    unavoidable in any full-replication ETF) are dropped; so are the
+    handful of blank/placeholder tickers those rows carry.
+
+    Columns: [ticker, name, sector, weight]. `weight` (% of fund NAV) is
+    kept so callers can rank by index weight — e.g. to cap the universe to
+    the largest N names for a tractable EDGAR ingest, the way this project
+    caps Korea/India to their most liquid names rather than ingesting
+    every constituent. See config.RUSSELL3000_MAX_TICKERS.
+    """
+    session = requests_cache.CachedSession(
+        str(config.HTTP_CACHE_PATH), backend="sqlite",
+        expire_after=config.CACHE_TTL_YAHOO,  # holdings are refreshed daily
+    )
+    session.headers.update({"User-Agent": config.SEC_USER_AGENT})
+    resp = session.get(IWV_HOLDINGS_URL, timeout=60)
+    resp.raise_for_status()
+    text = resp.content.decode("latin1")  # BlackRock serves this as ISO-8859-1
+    lines = text.splitlines()
+    header_idx = next(i for i, line in enumerate(lines) if line.startswith("Ticker,"))
+    df = pd.read_csv(io.StringIO("\n".join(lines[header_idx:])))
+
+    df = df[df["Asset Class"] == "Equity"]
+    df = df[~df["Ticker"].isin(["-", "", "—"])]
+    df["Weight (%)"] = pd.to_numeric(df["Weight (%)"], errors="coerce")
+    df = df.dropna(subset=["Weight (%)"])
+    df = df.drop_duplicates(subset="Ticker")
+
+    out = pd.DataFrame({
+        "ticker": df["Ticker"].astype(str).str.upper().str.replace(".", "-", regex=False),
+        "name": df["Name"],
+        "sector": df["Sector"],
+        "weight": df["Weight (%)"],
+    }).sort_values("weight", ascending=False).reset_index(drop=True)
+
+    if config.RUSSELL3000_MAX_TICKERS:
+        out = out.head(config.RUSSELL3000_MAX_TICKERS)
+    return out.reset_index(drop=True)
+
+
 def get_sp500_changes() -> pd.DataFrame:
     """Historical constituent changes: columns [date, added, removed].
 

@@ -130,6 +130,33 @@ class SP500Universe(Universe):
 
 
 @dataclass(frozen=True)
+class Russell3000Universe(Universe):
+    """The Russell 3000 swap the original config.py comment pointed at but
+    never implemented: same taxonomy as the S&P 500 (SEC EDGAR, us-gaap),
+    a wider and differently-selected ticker list, its own output paths.
+
+    Real free constituent data — see screener.universe.get_russell3000_constituents
+    for how (iShares' IWV ETF holdings, no key required). No historical
+    membership table is wired up: unlike Wikipedia's S&P 500 "selected
+    changes" table (imperfect but real), there is no free historical
+    Russell reconstitution feed at all, so `.corrected()` on this universe
+    would silently do nothing useful — membership() always returns None,
+    honestly, rather than pretending survivorship correction is available.
+    """
+
+    def tickers(self) -> list[str]:
+        from screener.universe import get_russell3000_constituents
+
+        return get_russell3000_constituents()["ticker"].tolist()
+
+    def sectors(self) -> pd.Series:
+        from screener.universe import get_russell3000_constituents
+
+        df = get_russell3000_constituents()
+        return pd.Series(df["sector"].values, index=df["ticker"])
+
+
+@dataclass(frozen=True)
 class IndiaUniverse(Universe):
     def tickers(self) -> list[str]:
         from screener.universe_in import get_in_universe
@@ -197,6 +224,22 @@ KOSPI = KospiUniverse(
     end=config.KR_BACKTEST_END,
 )
 
+RUSSELL3000 = Russell3000Universe(
+    name="russell3000",
+    currency="USD",
+    price_symbol_suffix="",
+    db_path=config.R3K_DB_PATH,
+    n_buckets=config.N_DECILES,
+    prices_cache=config.R3K_PRICES_CACHE_PATH,
+    panel_path=config.R3K_SCORES_PANEL_PATH,
+    bucket_returns_path=config.R3K_BUCKET_RETURNS_PATH,
+    coefs_path=config.R3K_COEFS_PATH,
+    validation_path=config.R3K_VALIDATION_SUMMARY_PATH,
+    rolling_path=config.R3K_ROLLING_SPREAD_PATH,
+    start=config.BACKTEST_START,
+    end=config.BACKTEST_END,
+)
+
 INDIA = IndiaUniverse(
     name="india",
     currency="INR",
@@ -214,7 +257,7 @@ INDIA = IndiaUniverse(
     backtestable=False,
 )
 
-UNIVERSES: dict[str, Universe] = {u.name: u for u in (SP500, KOSPI, INDIA)}
+UNIVERSES: dict[str, Universe] = {u.name: u for u in (SP500, RUSSELL3000, KOSPI, INDIA)}
 
 
 def get_universe(name: str) -> Universe:

@@ -110,19 +110,44 @@ KR_N_BUCKETS = 5
 IN_DB_PATH = DATA_DIR / "pit_in.duckdb"
 IN_PRICES_CACHE_PATH = DATA_DIR / "in_prices_monthly.parquet"
 IN_SCORES_PANEL_PATH = DATA_DIR / "in_scores_panel.parquet"
-IN_BUCKET_RETURNS_PATH = DATA_DIR / "in_bucket_returns.parquet"   # never written
-IN_COEFS_PATH = DATA_DIR / "in_lasso_coefs.parquet"               # never written
-IN_VALIDATION_SUMMARY_PATH = DATA_DIR / "in_validation_summary.csv"  # never written
-IN_ROLLING_SPREAD_PATH = DATA_DIR / "in_rolling_spread.parquet"      # never written
+IN_BUCKET_RETURNS_PATH = DATA_DIR / "in_bucket_returns.parquet"      # written; descriptive only
+IN_COEFS_PATH = DATA_DIR / "in_lasso_coefs.parquet"                  # never written — no LASSO fit
+IN_VALIDATION_SUMMARY_PATH = DATA_DIR / "in_validation_summary.csv"  # never written — no NW/DSR table
+IN_ROLLING_SPREAD_PATH = DATA_DIR / "in_rolling_spread.parquet"      # written when >=1 window fits
 
 # Yahoo serves ~5 annual periods per Indian filer, and only three of those
 # have broad coverage once a prior year is required for the YoY deltas
 # (FY2024/25/26, ~90 companies each). The screen therefore starts once
 # FY2024 results were filed. Buckets exist so the table can show a decile
-# column, but no return series is computed — see IN_BACKTESTABLE.
+# column. `backtestable=False` on the Universe is what actually stops the
+# LASSO fit and validation table — see screener/universes.py.
 IN_SCREEN_START = "2024-05-31"
 IN_SCREEN_END = "2026-12-31"
 IN_N_BUCKETS = 5
+
+# ---------------------------------------------------------------------------
+# Russell 3000 (US, broader universe) — see screener/universes.py
+# ---------------------------------------------------------------------------
+# Same taxonomy and data source as the S&P 500 (SEC EDGAR, us-gaap) — only
+# the ticker list differs — so this shares BACKTEST_START/END and the
+# rebalance frequency, but gets its own database and output paths so a
+# Russell 3000 run never collides with an S&P 500 one.
+R3K_DB_PATH = DATA_DIR / "pit_r3k.duckdb"
+R3K_PRICES_CACHE_PATH = DATA_DIR / "r3k_prices_monthly.parquet"
+R3K_SCORES_PANEL_PATH = DATA_DIR / "r3k_scores_panel.parquet"
+R3K_BUCKET_RETURNS_PATH = DATA_DIR / "r3k_bucket_returns.parquet"
+R3K_COEFS_PATH = DATA_DIR / "r3k_lasso_coefs.parquet"
+R3K_VALIDATION_SUMMARY_PATH = DATA_DIR / "r3k_validation_summary.csv"
+R3K_ROLLING_SPREAD_PATH = DATA_DIR / "r3k_rolling_spread.parquet"
+
+# The full Russell 3000 is ~2,580 names in the free IWV-holdings proxy this
+# project uses (screener.universe.get_russell3000_constituents) — ingesting
+# EDGAR companyfacts for all of them is honestly feasible (SEC's own rate
+# limit caps it near ~2,580/8 ~= 5-6 minutes of pure fetch time), but the
+# COMMITTED run here caps it to the top N by index weight for a runtime
+# closer to the S&P 500 backtest's. Set to None for a genuine full-universe
+# run; nothing else in the pipeline assumes a cap.
+RUSSELL3000_MAX_TICKERS: int | None = 300
 
 # ---------------------------------------------------------------------------
 # Modeling

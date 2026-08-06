@@ -203,7 +203,7 @@ if __name__ == "__main__":
     import argparse
 
     p = argparse.ArgumentParser(description="Composite fundamental screener dashboard")
-    p.add_argument("--universe", default="sp500", choices=["sp500", "kospi", "india"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "russell3000", "kospi", "india"])
     p.add_argument("--port", type=int, default=8050)
     a = p.parse_args()
     build_app(a.universe).run(debug=False, port=a.port)

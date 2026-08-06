@@ -131,6 +131,8 @@ def ingest_company(con, client: EdgarClient, cik: str, ticker: str) -> int:
             con.register("_staging", df)
             con.execute(
                 """INSERT INTO pit_facts
+                   (cik, ticker, tag, fiscal_period_end, start_date, filed_date,
+                    value, unit, form, fy, fp, is_restatement)
                    SELECT cik, ticker, tag, fiscal_period_end, start_date, filed_date,
                           value, unit, form, fy, fp, is_restatement
                    FROM _staging"""
@@ -154,12 +156,24 @@ def run_ingest(
 ) -> None:
     client = EdgarClient(cache_path=cache_path)
     cik_map = client.get_ticker_cik_map()
+    # Dash-agnostic index: EDGAR keys dual-class tickers with a dash
+    # ("BRK-B"), but a source can hand us a bare-concatenated form with no
+    # separator at all ("BRKB", as iShares' IWV Russell 3000 holdings CSV
+    # does — confirmed live: EDGAR's map has "BRK-B", IWV's CSV has "BRKB",
+    # and stripping only the INPUT's dash never fixes that since the map
+    # key still has one). Stripping both sides to a common form lets either
+    # convention resolve against the other.
+    cik_map_nodash = {k.replace("-", ""): v for k, v in cik_map.items()}
     con = connect(db_path)
     init_db(con)
     total = 0
     for i, ticker in enumerate(tickers, 1):
         # EDGAR uses '-' where exchanges use '.' (BRK.B -> BRK-B and vice versa)
-        cik = cik_map.get(ticker.upper()) or cik_map.get(ticker.upper().replace("-", ""))
+        cik = (
+            cik_map.get(ticker.upper())
+            or cik_map.get(ticker.upper().replace("-", ""))
+            or cik_map_nodash.get(ticker.upper().replace("-", ""))
+        )
         if cik is None:
             log.warning("No CIK for ticker %s — skipped", ticker)
             continue
@@ -175,7 +189,7 @@ def run_ingest(
 def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="Ingest fundamentals facts into the PIT DB")
-    p.add_argument("--universe", default="sp500", choices=["sp500"])
+    p.add_argument("--universe", default="sp500", choices=["sp500", "russell3000"])
     p.add_argument(
         "--taxonomy", default="us-gaap", choices=["us-gaap", "cvm-br", "dart-kr", "bse-in"],
         help=(
@@ -215,9 +229,14 @@ def main(argv: list[str] | None = None) -> None:
     # The universe list lives in the screener package; imported lazily so
     # pit_fundamentals itself stays importable without the screener installed.
     try:
-        from screener.universe import get_sp500_constituents
+        if args.universe == "russell3000":
+            from screener.universe import get_russell3000_constituents
 
-        tickers = get_sp500_constituents()["ticker"].tolist()
+            tickers = get_russell3000_constituents()["ticker"].tolist()
+        else:
+            from screener.universe import get_sp500_constituents
+
+            tickers = get_sp500_constituents()["ticker"].tolist()
     except ImportError:
         sys.exit("screener package not found — pass tickers programmatically via run_ingest()")
 
