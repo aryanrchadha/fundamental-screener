@@ -141,13 +141,23 @@ R3K_VALIDATION_SUMMARY_PATH = DATA_DIR / "r3k_validation_summary.csv"
 R3K_ROLLING_SPREAD_PATH = DATA_DIR / "r3k_rolling_spread.parquet"
 
 # The full Russell 3000 is ~2,580 names in the free IWV-holdings proxy this
-# project uses (screener.universe.get_russell3000_constituents) — ingesting
-# EDGAR companyfacts for all of them is honestly feasible (SEC's own rate
-# limit caps it near ~2,580/8 ~= 5-6 minutes of pure fetch time), but the
-# COMMITTED run here caps it to the top N by index weight for a runtime
-# closer to the S&P 500 backtest's. Set to None for a genuine full-universe
-# run; nothing else in the pipeline assumes a cap.
-RUSSELL3000_MAX_TICKERS: int | None = 300
+# project uses (screener.universe.get_russell3000_constituents). An initial
+# committed run capped this to the top 300 by index weight, but checking the
+# ticker sets directly showed 286 of those 300 were already S&P 500
+# constituents — that run was a pipeline consistency check, not a test of
+# whether the null result is specific to large-cap names. Of the full
+# ~2,582-name universe, 2,086 names are NOT S&P 500 constituents, so this is
+# set to None (full universe, no cap) to actually test that question against
+# the genuinely non-overlapping mid/small-cap tail. Live-verified: 2,547 of
+# 2,582 requested symbols return real Yahoo price history (the remainder
+# are genuinely delisted/unknown, confirmed by 3 retries each still failing
+# — see screener/prices.py's chunked-download retry logic, added after this
+# scale first triggered Yahoo's undocumented rate limit on a single-batch
+# request). The result at this scale is NOT a clean "no effect" like every
+# other market/universe in this project — see FINDINGS.md's Russell 3000
+# section for why it should be read as a survivorship-bias/outlier-
+# concentration artifact rather than a genuine edge before citing it.
+RUSSELL3000_MAX_TICKERS: int | None = None
 
 # ---------------------------------------------------------------------------
 # Modeling

@@ -90,13 +90,76 @@ def test_unknown_ticker_still_gets_a_column(monkeypatch, tmp_path):
 
     import yfinance
 
+    import screener.prices as prices_mod
+
     monkeypatch.setattr(yfinance, "download", fake_download)
+    # A permanently-unknown ticker never recovers on retry, so the real
+    # backoff (up to 20s+40s+60s) would only slow this test down for no
+    # signal — collapse it to instant retries here.
+    monkeypatch.setattr(prices_mod, "_RETRY_BACKOFF_SECONDS", 0.0)
     out = get_monthly_prices(
         ["005930", "999999"], start="2024-01-01", end="2024-02-10",
         cache_path=tmp_path / "px2.parquet", symbol_suffix=".KS",
     )
     assert list(out.columns) == ["005930", "999999"]
     assert out["999999"].isna().all()
+
+
+def test_zero_close_price_treated_as_missing_not_a_real_quote(monkeypatch, tmp_path):
+    """Yahoo pads a ticker's pre-listing history with literal 0.0 rather
+    than NaN (confirmed live on DEC/Diversified Energy, IPO'd Nov 2023,
+    which returned 0.0 for every month before that instead of an absent
+    row). A real market close is never exactly $0.00 — left as 0 it turns
+    into an infinite forward return (p1/p0 with p0 == 0) the month the
+    stock starts trading for real, which crashed the LASSO fit outright."""
+    def fake_download(symbols, **kwargs):
+        idx = pd.date_range("2024-01-01", periods=10, freq="D")
+        vals = [0.0] * 5 + [10.0] * 5
+        cols = pd.MultiIndex.from_product([["Close"], list(symbols)])
+        return pd.DataFrame({c: vals for c in cols}, index=idx).set_axis(cols, axis=1)
+
+    import yfinance
+
+    monkeypatch.setattr(yfinance, "download", fake_download)
+    out = get_monthly_prices(
+        ["NEWCO"], start="2024-01-01", end="2024-01-10",
+        cache_path=tmp_path / "px3.parquet",
+    )
+    assert not (out["NEWCO"] == 0.0).any()
+
+
+def test_chunked_download_recovers_partial_batch_via_retry(monkeypatch, tmp_path):
+    """A rate-limited chunk comes back with some symbols missing rather
+    than an exception (confirmed live: a single 2,582-symbol batch
+    request returned real data for ~2 of them via YFRateLimitError,
+    silently swallowed by yfinance into NaN columns). Retrying just the
+    still-missing symbols after a backoff should recover them without
+    re-requesting the whole chunk."""
+    import screener.prices as prices_mod
+
+    calls = []
+
+    def fake_download(symbols, **kwargs):
+        calls.append(list(symbols))
+        idx = pd.date_range("2024-01-01", periods=5, freq="D")
+        # First call for a symbol "fails" (empty), every subsequent call
+        # for the same symbol succeeds — simulates transient rate-limiting.
+        seen_before = any(s in prior for prior in calls[:-1] for s in symbols)
+        known = symbols if seen_before else []
+        cols = pd.MultiIndex.from_product([["Close"], known])
+        return pd.DataFrame(1.0, index=idx, columns=cols)
+
+    import yfinance
+
+    monkeypatch.setattr(yfinance, "download", fake_download)
+    monkeypatch.setattr(prices_mod, "_RETRY_BACKOFF_SECONDS", 0.0)
+    out = get_monthly_prices(
+        ["AAA", "BBB"], start="2024-01-01", end="2024-01-05",
+        cache_path=tmp_path / "px4.parquet",
+    )
+    assert len(calls) > 1                      # retried at least once
+    assert not out["AAA"].isna().all()          # recovered, not left NaN
+    assert not out["BBB"].isna().all()
 
 
 def test_india_is_registered_but_not_backtestable():

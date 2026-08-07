@@ -146,7 +146,7 @@ than assumed:
 So the residual bias is quantified rather than silently corrected with data
 that does not exist. Treat all backtest levels as optimistic.
 
-## US extension: Russell 3000 (a consistency check, not yet a broader test — see caveat below)
+## US extension: Russell 3000 (full universe) — a "survivor," and why it isn't one
 
 `--universe russell3000` swaps the ticker source without touching anything
 else — same SEC EDGAR/us-gaap taxonomy, same `screener/scores.py`, same
@@ -168,61 +168,90 @@ python -m screener.validation  --universe russell3000
 python -m dashboard.app        --universe russell3000
 ```
 
-The committed run caps the universe to the **top 300 names by index
-weight** (`config.RUSSELL3000_MAX_TICKERS`, set to `None` for the full
-~2,580) — a runtime tradeoff, not a pipeline limitation; nothing downstream
-assumes the cap. This surfaced a real ticker-format mismatch worth flagging
-for anyone using IWV as a constituent source elsewhere: EDGAR's ticker→CIK
-map keys dual-class shares with a dash (`BRK-B`), but IWV's raw holdings CSV
-serves the same ticker with no separator at all (`BRKB`) — neither of the
-project's existing dash-only fallbacks caught that (one strips the input's
-dash, but the map's key still has one), so `pit_fundamentals/ingest.py` now
-resolves through a dash-**agnostic** index built once per ingest, confirmed
-against EDGAR's live `company_tickers.json` (`BRKB` → CIK 0001067983, same
-CIK `BRK-B` resolves to).
+An initial committed run capped the universe to the top 300 names by index
+weight — but checking the ticker sets directly showed 286 of those 300
+were already S&P 500 constituents, making that run a pipeline consistency
+check, not a genuine breadth test. `config.RUSSELL3000_MAX_TICKERS` is now
+`None` (full universe): of the resulting **2,547 tickers with real Yahoo
+price history** (2,582 requested; the rest are genuinely delisted/unknown,
+confirmed by three retries each still failing), only 494 overlap the S&P
+500 — **2,053 are genuinely non-overlapping names**, the real test this
+project's own prior draft asked for.
 
-Live-verified end-to-end: 300 tickers, 650,339 fact rows ingested, 187/297
-names fully scored in the latest cross-section (297, not 300, because three
-tickers' EDGAR companyfacts came back empty or near-empty — e.g. a
-recently-listed name with no historical XBRL yet).
+Getting a trustworthy result at this scale required fixing two real bugs,
+both only visible once the universe stopped being large-cap-only:
+
+1. **Yahoo silently rate-limits large single-batch requests.** A single
+   `yf.download()` call for all 2,582 symbols returned real data for only
+   ~2 of them — `YFRateLimitError` on most of the batch, which yfinance
+   swallows into NaN columns rather than raising, so it looked like a data
+   problem rather than a request-shape one. Fixed in `screener/prices.py`
+   by chunking the download (250 symbols/call) with a pause between
+   chunks and an escalating-backoff retry for symbols still missing after
+   a chunk — confirmed live: 2,547/2,582 recovered.
+2. **Yahoo pads pre-listing history with literal `0.0`, not `NaN`.**
+   Confirmed on a real ticker (`DEC`/Diversified Energy, IPO'd Nov 2023,
+   whose cached history showed `0.0` for every month back to 2021). A real
+   market close is never exactly $0.00, so this silently produced an
+   infinite forward return (`p1 / p0` with `p0 == 0`) the moment the stock
+   actually started trading, crashing the LASSO fit. Fixed by treating an
+   exact-zero close as missing.
+
+Both are documented in `screener/prices.py`'s module docstring so the next
+person scaling this pipeline doesn't rediscover them from a stack trace.
 
 | Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat | DSR | Survives 95%? |
 |---|---|---|---|---|---|
-| Piotroski F-Score | −4.2% | −0.32 | −1.14 | 0.011 | No |
-| Altman Z-Score | −4.4% | −0.40 | −1.58 | 0.005 | No |
-| Ohlson O-Score | −7.1% | −0.74 | −2.58 | 0.000 | No |
-| **Composite (LASSO)** | **+0.4%** | **0.03** | **0.10** | **0.170** | **No** |
+| Piotroski F-Score | −6.9% | −0.49 | −1.69 | 0.001 | No |
+| Altman Z-Score | −10.6% | −1.04 | −3.97 | 0.000 | No |
+| Ohlson O-Score | −17.6% | −1.30 | −4.07 | 0.000 | No |
+| **Composite (LASSO)** | **+13.2%** | **0.75** | **2.32** | **0.988** | **YES** |
 
-Same verdict as the S&P 500 table: nothing survives the four-trial Deflated
-Sharpe correction. **Read this as a consistency check, not a test of a
-broader universe**: checking the ticker sets directly, 286 of these 300
-names are already S&P 500 constituents (weight-ranking a ~2,580-name free
-proxy and capping to the top 300 selects almost the same mega-caps the
-S&P 500 already contains) — only 14 are genuinely different names. The
-composite's point estimate is closer to flat than the S&P 500's (+0.4%/yr
-vs. −0.7%/yr) and the walk-forward LASSO shrinks every score to (near-)zero
-from 2019 onward exactly as it does in the S&P 500 run — an independently
-constructed, 95%-overlapping universe reproduces the same result, not
-evidence about whether the effect lives in the smaller Russell 3000 names
-this cap excludes (see `RUSSELL3000_MAX_TICKERS` — set it higher or to
-`None` to actually test that). 167 months, first half +3.3% cumulative,
-second half −10.9%: same qualitative decay pattern as the headline result.
+**This is the only "survivor" in the entire project — read the rest of this
+section before believing it.** Every individual score is strongly and
+significantly *negative* (O-Score's t-stat of −4.07 is the most significant
+result anywhere in this project, in the *distress-is-contrarian* direction
+already seen in every other market), yet the LASSO composite is positive
+with DSR = 0.988. That combination is possible because every LASSO
+coefficient is negative at every refit — the composite ranks the
+*worst*-fundamentals names into D10, and D10 beat D1. Three things point to
+this being an artifact rather than a real reversal:
 
-Rolling 24-month spread (`python -m dashboard.app --universe russell3000` →
-"Rolling spread"): 144 windows, **0 clear the DSR 95% band in either
-direction** — no false-positive stretch the way the survivorship-corrected
-US run shows. Mean annualized spread +0.9%/yr against a median ±26.2%/yr
-band; by window-year, mid-single-digit positive spreads 2015–2019, a dip to
-−22%/−17% in the 2013–2014 windows (the same short-history-inflates-vol
-effect the S&P 500 chart shows in its own early years), and −11%/−6% in the
-2021–2022 windows.
+- **No survivorship correction exists for this universe** (see below) —
+  today's Russell 3000 list only contains names that are still around, so
+  the "worst fundamentals" bucket structurally excludes every company that
+  went bankrupt between 2012 and today and keeps only the ones that
+  survived, many via a distress-recovery rally. This selection effect
+  predicts exactly the pattern observed.
+- **Nearly the entire return is concentrated in specific single-name,
+  single-month events.** December 2020's spread is dominated by `GME` —
+  GameStop's short-squeeze month, **+1,625% in one month**, equal-weighted
+  into a 102-name bucket; April 2025 by `SBET` (+2,267%, a crypto-treasury
+  pivot). Winsorizing the spread series at the 1st/99th percentile still
+  survives (DSR 0.993), but **dropping just those two months entirely
+  drops DSR to 0.932 — below the 0.95 bar.** A result whose survival flips
+  depending on whether two months are capped or removed is not robust.
+- **The effect is entirely a post-2019 phenomenon.** Cumulative spread:
+  −2.8% in the first half (2012–2018), **+383.5%** in the second
+  (2019–2025) — a genuine cross-sectional factor premium does not usually
+  materialize from nothing across 7 flat years and then explode across the
+  pandemic/meme-stock/crypto-mania era specifically.
+
+Full discussion, including the rolling-window breakdown by year, is in
+[FINDINGS.md](FINDINGS.md). **The honest reading is not "found an edge in
+small-caps" — it is a worked example of exactly the failure mode Deflated
+Sharpe and rolling-window scrutiny exist to catch**, made possible here
+only because uncorrected survivorship bias and equal-weighting are both
+much more dangerous in a ~2,500-name small/micro-cap universe than in a
+500-name large-cap one.
 
 **What this does not add**: no survivorship correction (`.corrected()` is
 supported by the `Universe` interface, but `Russell3000Universe.membership()`
 always returns `None` — there is no free historical Russell reconstitution
 feed, unlike Wikipedia's imperfect-but-real S&P 500 changes table, so
 claiming a correction here would be fabricating data that does not exist,
-not correcting for its absence).
+not correcting for its absence). That absence is precisely what makes this
+result untrustworthy rather than merely unlucky.
 
 ## International extension: Brazil / B3 (proof of concept)
 
@@ -638,7 +667,8 @@ python -m screener.backtest                          # scores, composite, bucket
 python -m screener.validation                        # NW t-stats + DSR summary -> console + CSV
 python -m dashboard.app                              # http://localhost:8050
 
-# Russell 3000 (top 300 by weight, deciles — see README caveat: mostly overlaps the S&P 500)
+# Russell 3000 (full ~2,580-name universe, deciles — ~10-15 min incl. rate-limit
+# retries; the composite "survives" here, see README/FINDINGS.md for why not to trust it)
 python -m pit_fundamentals.ingest --universe russell3000 --db data/pit_r3k.duckdb
 python -m screener.backtest    --universe russell3000
 python -m screener.validation  --universe russell3000

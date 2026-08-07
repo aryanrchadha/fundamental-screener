@@ -16,7 +16,8 @@ bottom bucket:
 |---|---|---|---|---|---|---|---|
 | **US** — S&P 500 | 503 | deciles | 167 | −0.7% | −0.29 | 0.092 | **No** |
 | US, survivorship-corrected | 294→493 | deciles | 167 | −1.3% | −0.42 | 0.067 | **No** |
-| **US** — Russell 3000 (top 300) | 300 | deciles | 167 | +0.4% | +0.10 | 0.170 | **No** |
+| US — Russell 3000 (top 300, consistency check) | 300 | deciles | 167 | +0.4% | +0.10 | 0.170 | **No** |
+| **US** — Russell 3000 (full universe) | 2,547 | deciles | 167 | +13.2% | +2.32 | 0.988 | **"Yes" ‡** |
 | **Korea** — KOSPI 120 | 120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** |
 | Korea, survivorship-corrected | 107→120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** (identical) |
 | **India** — BSE 100 | 100 | quintiles | 26 † | +2.1% † | +0.34 † | 0.233 † | **No** † |
@@ -40,7 +41,25 @@ so India neither strengthens nor weakens the finding. `screener/backtest.py`
 still refuses to emit a validation table for India (`backtestable=False`),
 and the dashboard still hides the views that would depend on one.
 
-**Read across the table: six market-configurations, zero survivors.**
+**‡ The full-universe Russell 3000 row mechanically survives the DSR test
+and should not be believed anyway.** Every individual score is strongly
+and significantly negative (O-Score t = −4.07, the most significant single
+result in this project) in the same distress-is-contrarian direction seen
+everywhere else, yet the composite is positive because every LASSO
+coefficient is negative — it ranks the *worst*-fundamentals names into the
+winning bucket. That bucket has no survivorship correction available (no
+free historical Russell membership feed exists), is driven substantially
+by two single-name, single-month events (GameStop's +1,625% short-squeeze
+month, a crypto-treasury pivot's +2,267% month — dropping just those two
+months drops DSR to 0.932, below the bar), and is a purely post-2019
+phenomenon (−2.8% cumulative 2012–2018, +383.5% 2019–2025). See the full
+Russell 3000 section below for the complete mechanism. Counted as a
+survivor in the tally below only in the narrow, literal, DSR-formula
+sense — not as evidence of a real edge.
+
+**Read across the table: seven market-configurations, one narrow/mechanical
+"survivor" that the rest of this memo argues against trusting, six
+genuine non-survivors.**
 
 ## Validation summary — S&P 500 (the primary sample)
 
@@ -229,101 +248,116 @@ constructed example.
    noncontrolling interests into liabilities, slightly overstating leverage
    for consolidated groups.
 
-## US extension: Russell 3000 (same taxonomy, mostly the same names)
+## US extension: Russell 3000 — the project's one "survivor," and why it isn't one
 
-The S&P 500 result above is a large-cap-only sample by construction. Before
-reaching for a second regulator, the more direct question is whether the
-same US-GAAP taxonomy and the same scoring functions find anything
-different in a wider, less mega-cap-concentrated US universe. `--universe
-russell3000` answers that without introducing a new data source or a new
-accounting standard: same SEC EDGAR/us-gaap facts, same
-`screener/scores.py` functions, same 2012–2025 date range and monthly
-rebalance — only the ticker list changes, sourced from BlackRock's IWV ETF
-holdings (the standard free proxy for Russell 3000 membership, since the
-licensed FTSE Russell constituent file is a commercial product). The
-committed run caps the universe to the **top 300 names by index weight**
-(`config.RUSSELL3000_MAX_TICKERS`); nothing downstream assumes the cap.
+The S&P 500 result above is a large-cap-only sample by construction.
+`--universe russell3000` tests whether the same US-GAAP taxonomy and the
+same scoring functions find anything different in a wider, less
+mega-cap-concentrated US universe, using BlackRock's IWV ETF holdings as
+the free proxy for Russell 3000 membership (no licensed constituent feed
+exists free).
 
-**Coverage.** 300 tickers ingested (650,339 fact rows), 187 of 297 names
-fully scored in the latest cross-section — 297, not 300, because three
-tickers' EDGAR companyfacts came back empty or near-empty (a recently
-listed name with no historical XBRL yet is the typical cause). Exclusion
-counts mirror the S&P 500 pattern exactly: Piotroski excludes the most
-(108/297, driven by the same `GrossProfit`/`CostOfRevenue` coverage gap),
-Altman and Ohlson fewer (62/297 and 57/297).
+**A first pass, capped to the top 300 names by index weight
+(`config.RUSSELL3000_MAX_TICKERS = 300`), turned out not to test what it
+was supposed to.** Checking the ticker sets directly: 286 of those 300
+names were already S&P 500 constituents — weight-ranking a ~2,580-name
+free proxy and capping to the top 300 re-selects almost exactly the same
+mega-caps, because both rankings are dominated by market capitalization.
+That run (300 tickers, 650,339 fact rows, D10−D1 composite +0.4%/yr, DSR
+0.170, no survivor) was a pipeline consistency check — an independently
+constructed, 95%-overlapping universe reproducing the S&P 500 result to
+within noise — not a test of whether the null result is specific to
+large-cap names. Falsifying that properly needed the genuinely
+non-overlapping tail the weight cap was excluding.
+
+### The full universe: 2,547 names, 2,053 of them genuinely new
+
+Setting `RUSSELL3000_MAX_TICKERS = None` surfaced two real, previously
+latent bugs — both invisible in a 300-name, all-large-cap sample, both
+caught before trusting any number from this run:
+
+1. **Yahoo silently rate-limits a large single-batch request.** A single
+   `yf.download()` call for all 2,582 symbols returned real data for only
+   ~2 of them — `YFRateLimitError` on most of the batch, and yfinance
+   swallows that into NaN columns rather than raising, so the failure
+   looked like "these names have no price history" rather than a request
+   shape problem. Fixed by chunking the download (250 symbols/call, a
+   pause between chunks) with an escalating-backoff retry for symbols
+   still missing after a chunk — recovered coverage from ~43% to
+   **2,547/2,582 (98.6%)**, with the unrecovered ~35 failing all three
+   retries consistently (the signature of genuinely delisted/unknown
+   tickers, not throttling).
+2. **Yahoo pads a ticker's pre-listing history with literal `0.0`, not
+   `NaN`.** Confirmed on real data: `DEC` (Diversified Energy, IPO'd Nov
+   2023) returned `0.0` for every month back to 2021 instead of an absent
+   row. A real market close is never exactly $0.00, so left uncorrected
+   this produces an infinite forward return (`p1/p0` with `p0 == 0`) the
+   month the stock actually starts trading, crashing the LASSO fit
+   outright rather than silently. Fixed by treating an exact-zero close
+   as missing.
+
+Of the 2,547 tickers with real price history, only 494 overlap the S&P
+500 — **2,053 are genuinely non-overlapping names**, actually testing the
+question the top-300 run could not.
 
 | Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat | Skew | Kurtosis | DSR | Survives 95%? |
 |---|---|---|---|---|---|---|---|
-| Piotroski F-Score | −4.2% | −0.32 | −1.14 | −0.87 | 6.57 | 0.011 | **No** |
-| Altman Z-Score | −4.4% | −0.40 | −1.58 | −0.24 | 2.91 | 0.005 | **No** |
-| Ohlson O-Score | −7.1% | −0.74 | −2.58 | +0.50 | 4.59 | 0.000 | **No** |
-| Composite (LASSO) | +0.4% | +0.03 | +0.10 | −0.40 | 4.59 | 0.170 | **No** |
+| Piotroski F-Score | −6.9% | −0.49 | −1.69 | −1.90 | 11.47 | 0.001 | **No** |
+| Altman Z-Score | −10.6% | −1.04 | −3.97 | +0.00 | 8.05 | 0.000 | **No** |
+| Ohlson O-Score | −17.6% | −1.30 | −4.07 | −1.66 | 8.49 | 0.000 | **No** |
+| **Composite (LASSO)** | **+13.2%** | **+0.75** | **+2.32** | **+1.76** | **9.25** | **0.988** | **YES** |
 
-**The wider universe does not rescue the signal — if anything it sharpens
-the same failure.** The individual scores are directionally identical to
-the S&P 500 table (all three negative, O-Score the worst by a wide margin,
-consistent with distress ranking being contrarian in this sample rather
-than a large-cap-specific artefact). The composite's point estimate is
-closer to flat here (+0.4%/yr vs. the S&P 500's −0.7%/yr) but still carries
-a DSR of 0.170, nowhere near the 0.95 bar, and the annual coefficient
-history shows the identical shrinkage pattern: nonzero, negative F/O
-coefficients through 2018, shrinking to exactly zero for 2019–2022 as the
-CV-selected α jumps an order of magnitude, a small nonzero O-Score
-coefficient returning 2023–2025. The Z-Score coefficient never exceeds
-−0.0006 in magnitude at any refit (effectively zero throughout), the same
-pattern as the S&P 500 — LassoCV finds no stable relationship between
-sector-neutral Altman Z and forward returns in either US universe.
+O-Score's t-stat of −4.07 is the most significant single result anywhere
+in this project — and it is in the *distress-is-contrarian* direction seen
+in every other market, sharper here than in the S&P 500 or Korea. The
+composite nonetheless survives, and this is the only "survivor" across
+every strategy-market pair examined. **It should not be believed.**
 
-**Decay shape.** 167 months, full-period cumulative composite spread −8.0%
-(vs. the S&P 500's −15.9%), split +3.3% in the first half and −10.9% in the
-second — the same qualitative "no reliable effect, concentrated drawdown"
-pattern as the S&P 500's own first/second-half split, on an independently
-constructed universe with a different, broader set of names. The rolling
-24-month chart (144 of 167 windows populated) shows **0 windows clearing
-the DSR band in either direction** — no false-positive stretch of the kind
-the S&P 500's *survivorship-corrected* run produced (20 of 144 windows
-there, discussed and explicitly not oversold in the rolling-decay section
-below). Mean annualized spread across windows is +0.9%/yr against a median
-±26.2%/yr hurdle; by window-year, small positive spreads 2015–2019
-(+4% to +9%), a return to negative territory in 2021–2022 (−11%/−6%) that
-the S&P 500's own rolling windows do *not* show over the same years
-(+3%/+2%, still positive there) — a genuine divergence between the two US
-universes worth flagging rather than glossing over, though neither reading
-clears the DSR band in either direction — and −22%/−17% in the earliest
-2013–2014 windows, the same short-history-inflates-volatility effect the
-S&P 500's earliest windows show, here on a differently-selected universe
-rather than a coincidence of shared tickers.
+**Mechanism.** Every LASSO coefficient is negative at every refit (F, Z,
+and O all point the "wrong" way), so the composite ranks the *worst*-
+fundamentals names into D10 — and D10 beat D1. Three independent checks
+point to this being an artifact:
 
-**What this run actually tests — stated honestly, because it is less than
-the section title implies.** Checking the two ticker sets directly: **286
-of the 300 Russell 3000 names here are already S&P 500 constituents**; only
-14 are not (`ALAB`, `AU`, `BE`, `EA`, `LNG`, `NET`, `NTRA`, `NU`, `RKLB`,
-`RVMD`, `SNOW`, `SPCX`, `SPOT`, plus Berkshire under its bare-concatenated
-ticker form). Weight-ranking a ~2,580-name free proxy and then capping to
-the top 300 by weight does not, in practice, sample a broader universe —
-it re-selects almost exactly the same mega-caps the S&P 500 already
-contains, because both rankings are dominated by market capitalization.
-**This run therefore does not meaningfully test "is the effect concentrated
-outside the S&P 500's 503 names" — that would require sampling by name
-count or including the smaller Russell 3000 constituents the weight cap
-excludes, which remains untested.** What it does show, more modestly: an
-independently constructed universe (different source, different sector
-labels, a different tie-breaking process for the handful of non-overlapping
-names) that is 95% the same companies reproduces the same result to within
-noise — a consistency check on the pipeline and the finding's robustness to
-universe-construction detail, not a test of whether the effect lives in
-smaller US names. Falsifying the "just the S&P 500" hypothesis properly
-would need `config.RUSSELL3000_MAX_TICKERS = None` (or a materially higher
-cap) run against the genuinely non-overlapping mid/small-cap tail — left as
-future work, and flagged here rather than implied by this run's title.
+1. **No survivorship correction exists for this universe, and this is the
+   universe where that matters most.** `Russell3000Universe.membership()`
+   always returns `None` (no free historical Russell reconstitution feed,
+   unlike Wikipedia's imperfect S&P 500 changes table). Today's Russell
+   3000 list only contains names still around today, so the "worst
+   fundamentals" bucket structurally excludes every company that went
+   bankrupt over 2012–2025 and keeps only the ones that survived — often
+   via a distress-recovery rally. In a 503-name, historically-stable
+   large-cap index this bias is modest; in a ~2,500-name small/micro-cap
+   universe with real, frequent delistings, it is not.
+2. **Concentration in specific single-name, single-month events.**
+   December 2020's bucket spread is dominated by `GME` — GameStop's short
+   squeeze, **+1,625% in one month**, equal-weighted into a 102-name
+   bucket (bucket mean +28.7% vs. median +3.5% that month). April 2025 is
+   dominated by `SBET` (+2,267%, a crypto-treasury pivot). Sensitivity
+   check: winsorizing the spread series at the 1st/99th percentile still
+   survives (DSR 0.993), but **dropping those two months outright drops
+   DSR to 0.932 — below the 0.95 bar.** A result whose survival flips
+   between "cap the outlier" and "exclude the outlier" is not robust; it
+   is sitting exactly on the edge the correction is supposed to catch.
+3. **The effect is a post-2019 phenomenon, not a persistent premium.**
+   Cumulative composite spread: −2.8% across the first half (2012–2018,
+   essentially flat for seven years), **+383.5%** across the second
+   (2019–2025). The rolling 24-month window chart (144 windows) shows 17
+   clearing the positive DSR band, all concentrated 2021–2025 (mean
+   annualized spread by window-year: 2021 +32%, 2022 +22%, 2024 +20%,
+   2025 +42%, against −9% to +14% for every year 2013–2019). A genuine
+   cross-sectional factor premium does not typically sit at zero for
+   seven years and then appear entirely across the
+   pandemic/meme-stock/crypto-mania era.
 
-**What it does not establish either**: survivorship correction. Unlike the
-S&P 500's Wikipedia constituent-changes table, there is no free historical
-Russell reconstitution feed, so `Russell3000Universe.membership()` always
-returns `None` — this run is silently subject to the same look-ahead risk
-Wikipedia's table (imperfectly) mitigates for the S&P 500, and that
-limitation is left explicit rather than worked around with fabricated
-membership dates.
+**The honest reading is not "found an edge in small-caps" — it is a
+worked example of exactly the failure mode Deflated Sharpe and
+rolling-window scrutiny exist to catch, made visible only because
+uncorrected survivorship bias and equal-weighting are both far more
+dangerous at this universe's scale than at the S&P 500's.** Nothing in
+this project treats this as a real result; it is reported in full, with
+the mechanism identified, because a memo that quietly omitted its one
+positive-looking number would be less honest than one that explains why
+that number does not mean what it appears to.
 
 ## International extension (Brazil / B3): what was proven and what wasn't
 
@@ -907,27 +941,39 @@ these scores are a defensible *screen* and a genuinely reusable piece of
 infrastructure, but not, on this evidence, a strategy.
 
 The Russell 3000 extension adds a third independent full backtest without
-adding a new regulator or taxonomy — and it is worth being precise about
-what it does and does not show, stated in full in its own section above.
-Because the committed run caps the universe to the top 300 names by index
-weight, 286 of those 300 are already S&P 500 constituents; it is a
-consistency check on the pipeline (an independently constructed,
-95%-overlapping universe reproduces the same failure shape — all four
-strategies fail, O-Score worst, the Z-Score coefficient effectively zero
-at every refit), not a genuine test of whether the null result is specific
-to large-cap names. That test would need the smaller Russell 3000
-constituents the weight cap excludes, and remains open.
+adding a new regulator or taxonomy, and it is the one place this memo's
+"zero survivors" pattern breaks — worth being precise about exactly how,
+since the honest answer is not "it doesn't break" but "it breaks in a way
+that argues against itself." A first pass, capped to the top 300 names by
+index weight, turned out to be 286/300 already-S&P-500 names — a pipeline
+consistency check, not a real breadth test. The genuine test, run against
+the full ~2,580-name universe (2,053 names genuinely outside the S&P 500),
+produces the project's only nominal survivor: composite DSR = 0.988, while
+every individual score is strongly and significantly negative (O-Score
+t = −4.07, the sharpest single result in this project) in the same
+distress-is-contrarian direction as everywhere else. That combination is
+possible only because every LASSO coefficient is negative — the composite
+ranks the *worst*-fundamentals names as the winning bucket — and three
+independent checks (no survivorship correction on a universe where that
+matters far more than at 503 stable large-caps; a result that flips from
+surviving to failing depending on whether two single-name mania months are
+capped or dropped entirely; a cumulative return that is flat for seven
+years and then entirely a 2019–2025 phenomenon) point to this being a
+survivorship-bias-and-outlier-concentration artifact rather than a real
+reversal of the distress-anomaly finding. Full mechanism in the Russell
+3000 section above.
 
-Correcting for survivorship does not rescue it. Re-running the S&P 500 and
-Korea with each rebalance restricted to names actually listed at the time
-leaves the US conclusion unchanged (individual scores move in both
-directions, none survives) and leaves the Korean result numerically
-identical, because the filing-date gate had already made look-ahead
-impossible. The Russell 3000 run has no equivalent correction available —
-no free historical Russell reconstitution feed exists, unlike Wikipedia's
-imperfect-but-real S&P 500 changes table — so that limitation is left
-explicit rather than worked around. Adding India extends the screen but
-deliberately not the evidence base: its composite ranking has a median
+Correcting for survivorship does not rescue the two markets where it is
+possible. Re-running the S&P 500 and Korea with each rebalance restricted
+to names actually listed at the time leaves the US conclusion unchanged
+(individual scores move in both directions, none survives) and leaves the
+Korean result numerically identical, because the filing-date gate had
+already made look-ahead impossible. The Russell 3000 run has no equivalent
+correction available at all — no free historical Russell reconstitution
+feed exists, unlike Wikipedia's imperfect-but-real S&P 500 changes table —
+and that absence is precisely the mechanism the section above argues is
+driving its one positive-looking number. Adding India extends the screen
+but deliberately not the evidence base: its composite ranking has a median
 month-to-month rank correlation of 0.998 and updates on only three annual
 filings, so its 26 monthly observations carry an effective sample nearer
 3. Its descriptive spread (+2.1%/yr, naive t +0.34) is reported in the
@@ -939,7 +985,10 @@ that as disqualifying rather than a gap to paper over.
 
 Across everything here — **twelve strategy-market pairs (three full
 backtestable markets × four strategies), two survivorship-corrected
-re-runs, six market-configurations, three regulators and three accounting
-taxonomies — there are zero survivors.** That consistency is the result.
-It is also why the reusable part of this project is the point-in-time
-infrastructure rather than the signal.
+re-runs, seven market-configurations, three regulators and three
+accounting taxonomies — there is exactly one nominal survivor, and this
+memo's own evidence argues it is not real.** Discounting it, the pattern
+is unbroken: zero genuine survivors. That consistency, and the discipline
+of reporting the one exception in full rather than omitting it, is the
+result. It is also why the reusable part of this project is the
+point-in-time infrastructure rather than the signal.
