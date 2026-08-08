@@ -214,15 +214,29 @@ result anywhere in this project, in the *distress-is-contrarian* direction
 already seen in every other market), yet the LASSO composite is positive
 with DSR = 0.988. That combination is possible because every LASSO
 coefficient is negative at every refit — the composite ranks the
-*worst*-fundamentals names into D10, and D10 beat D1. Three things point to
+*worst*-fundamentals names into D10, and D10 beat D1. Four things point to
 this being an artifact rather than a real reversal:
 
+- **A direct audit confirms the survivorship-bias hypothesis rather than
+  just arguing for it.** If D10 structurally over-represents companies
+  that crashed and survived (rather than the ones that crashed and
+  delisted, absent from any backtest built on today's constituent list),
+  that predicts D10 should be full of "distressed survivors." Checking
+  directly against the 742 D10 tickers with price history: 392 (52.8%)
+  had a peak-to-trough drawdown worse than −70% at some point in-sample,
+  and 202 of those (27% of all D10 names) recovered to over half their
+  prior peak afterward — `GME` (−91.1% drawdown, then the short squeeze)
+  and `SBET` (−99.9%, then the crypto pivot) are both in this group,
+  tying this check to the outlier-month one below. **Removing just these
+  202 names from D10 drops annualized return from +13.2% to +8.9%, t from
+  2.32 to 1.88, and DSR from 0.988 to 0.9145 — below the bar** — on its
+  own, without touching anything else about the run.
 - **No survivorship correction exists for this universe** (see below) —
   today's Russell 3000 list only contains names that are still around, so
   the "worst fundamentals" bucket structurally excludes every company that
   went bankrupt between 2012 and today and keeps only the ones that
-  survived, many via a distress-recovery rally. This selection effect
-  predicts exactly the pattern observed.
+  survived, many via a distress-recovery rally — the mechanism the audit
+  above confirms directly rather than merely predicts.
 - **Nearly the entire return is concentrated in specific single-name,
   single-month events.** December 2020's spread is dominated by `GME` —
   GameStop's short-squeeze month, **+1,625% in one month**, equal-weighted

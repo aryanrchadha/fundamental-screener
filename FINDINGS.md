@@ -47,15 +47,19 @@ and significantly negative (O-Score t = −4.07, the most significant single
 result in this project) in the same distress-is-contrarian direction seen
 everywhere else, yet the composite is positive because every LASSO
 coefficient is negative — it ranks the *worst*-fundamentals names into the
-winning bucket. That bucket has no survivorship correction available (no
-free historical Russell membership feed exists), is driven substantially
-by two single-name, single-month events (GameStop's +1,625% short-squeeze
-month, a crypto-treasury pivot's +2,267% month — dropping just those two
-months drops DSR to 0.932, below the bar), and is a purely post-2019
-phenomenon (−2.8% cumulative 2012–2018, +383.5% 2019–2025). See the full
-Russell 3000 section below for the complete mechanism. Counted as a
-survivor in the tally below only in the narrow, literal, DSR-formula
-sense — not as evidence of a real edge.
+winning bucket. A direct audit confirms why: 27% of that bucket's unique
+names (202/743) crashed more than 70% at some point in-sample and
+recovered — exactly the "distressed survivor" population an uncorrected,
+backward-applied constituent list selects for — and removing just those
+202 names drops DSR from 0.988 to 0.9145, below the bar, on its own. The
+result is additionally driven by two single-name, single-month events
+(GameStop's +1,625% short-squeeze month, a crypto-treasury pivot's +2,267%
+month — both members of that same 202-name recovery group), and is a
+purely post-2019 phenomenon (−2.8% cumulative 2012–2018, +383.5%
+2019–2025). See the full Russell 3000 section below for the complete
+mechanism and the audit methodology. Counted as a survivor in the tally
+below only in the narrow, literal, DSR-formula sense — not as evidence of
+a real edge.
 
 **Read across the table: seven market-configurations, one narrow/mechanical
 "survivor" that the rest of this memo argues against trusting, six
@@ -315,20 +319,52 @@ every strategy-market pair examined. **It should not be believed.**
 
 **Mechanism.** Every LASSO coefficient is negative at every refit (F, Z,
 and O all point the "wrong" way), so the composite ranks the *worst*-
-fundamentals names into D10 — and D10 beat D1. Three independent checks
-point to this being an artifact:
+fundamentals names into D10 — and D10 beat D1. Four independent checks
+point to this being an artifact, the first a direct audit of the
+survivorship-bias hypothesis rather than an argument for why it should be
+true.
 
-1. **No survivorship correction exists for this universe, and this is the
+1. **A direct audit confirms the "distressed survivor" population, and
+   removing it collapses the result.** No historical Russell membership
+   feed exists to correct survivorship directly, but the hypothesis makes
+   a testable prediction: D10 (the "worst fundamentals" bucket) should be
+   disproportionately populated by companies that crashed hard at some
+   point in-sample and then recovered — the exact population an
+   uncorrected backward-applied membership list would selectively keep,
+   since the companies that crashed and *didn't* recover (bankrupt,
+   delisted, acquired for pennies) are structurally absent from any
+   backtest built on today's constituent list. Testing this directly
+   against the 742 D10 tickers with price history: **392 (52.8%)
+   experienced a severe peak-to-trough drawdown of more than 70% at some
+   point in 2012–2025**, and of those, **202 (51.5%, or 27% of all D10
+   names) recovered to more than half their prior peak afterward** —
+   `GME` (max drawdown −91.1%, then December 2020's short squeeze) and
+   `SBET` (−99.9%, then April 2025's crypto-treasury pivot) are both
+   members of exactly this subgroup, tying this check to the outlier-month
+   check below rather than being a separate story. This 202-name subgroup
+   is only 31% of D10's ticker-months but carries a mean forward return of
+   +3.7%/month against +2.4%/month for the rest of D10 — a **median**
+   return of only +0.3% against the rest's +0.7%, confirming the
+   outperformance is a right-tail few-big-winners effect within the
+   recovery group itself, not a broad recovery premium. Removing these 202
+   tickers from D10 entirely and recomputing the spread against the
+   unchanged D1: **annualized return drops from +13.2% to +8.9%, the
+   Newey-West t-stat from 2.32 to 1.88, and DSR from 0.988 to 0.9145 — below
+   the 0.95 bar.** A single, economically-interpretable, ex-ante-defined
+   subgroup (27% of D10's unique names) is sufficient on its own to flip
+   the survival verdict.
+2. **No survivorship correction exists for this universe, and this is the
    universe where that matters most.** `Russell3000Universe.membership()`
    always returns `None` (no free historical Russell reconstitution feed,
    unlike Wikipedia's imperfect S&P 500 changes table). Today's Russell
    3000 list only contains names still around today, so the "worst
    fundamentals" bucket structurally excludes every company that went
    bankrupt over 2012–2025 and keeps only the ones that survived — often
-   via a distress-recovery rally. In a 503-name, historically-stable
+   via a distress-recovery rally, now directly confirmed by check 1 above
+   rather than merely argued for. In a 503-name, historically-stable
    large-cap index this bias is modest; in a ~2,500-name small/micro-cap
    universe with real, frequent delistings, it is not.
-2. **Concentration in specific single-name, single-month events.**
+3. **Concentration in specific single-name, single-month events.**
    December 2020's bucket spread is dominated by `GME` — GameStop's short
    squeeze, **+1,625% in one month**, equal-weighted into a 102-name
    bucket (bucket mean +28.7% vs. median +3.5% that month). April 2025 is
@@ -338,7 +374,7 @@ point to this being an artifact:
    DSR to 0.932 — below the 0.95 bar.** A result whose survival flips
    between "cap the outlier" and "exclude the outlier" is not robust; it
    is sitting exactly on the edge the correction is supposed to catch.
-3. **The effect is a post-2019 phenomenon, not a persistent premium.**
+4. **The effect is a post-2019 phenomenon, not a persistent premium.**
    Cumulative composite spread: −2.8% across the first half (2012–2018,
    essentially flat for seven years), **+383.5%** across the second
    (2019–2025). The rolling 24-month window chart (144 windows) shows 17
@@ -953,15 +989,17 @@ every individual score is strongly and significantly negative (O-Score
 t = −4.07, the sharpest single result in this project) in the same
 distress-is-contrarian direction as everywhere else. That combination is
 possible only because every LASSO coefficient is negative — the composite
-ranks the *worst*-fundamentals names as the winning bucket — and three
-independent checks (no survivorship correction on a universe where that
-matters far more than at 503 stable large-caps; a result that flips from
-surviving to failing depending on whether two single-name mania months are
-capped or dropped entirely; a cumulative return that is flat for seven
-years and then entirely a 2019–2025 phenomenon) point to this being a
-survivorship-bias-and-outlier-concentration artifact rather than a real
-reversal of the distress-anomaly finding. Full mechanism in the Russell
-3000 section above.
+ranks the *worst*-fundamentals names as the winning bucket — and four
+independent checks (a direct audit confirming 27% of that bucket's unique
+names crashed >70% and recovered, with removing just those names alone
+dropping DSR below the bar; no survivorship correction on a universe where
+that matters far more than at 503 stable large-caps; a result that flips
+from surviving to failing depending on whether two single-name mania
+months are capped or dropped entirely; a cumulative return that is flat
+for seven years and then entirely a 2019–2025 phenomenon) point to this
+being a survivorship-bias-and-outlier-concentration artifact rather than a
+real reversal of the distress-anomaly finding. Full mechanism and audit
+methodology in the Russell 3000 section above.
 
 Correcting for survivorship does not rescue the two markets where it is
 possible. Re-running the S&P 500 and Korea with each rebalance restricted
