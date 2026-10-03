@@ -10,16 +10,18 @@ Ratio**), served in a Plotly Dash dashboard.
 ## Headline validation result
 
 > Regenerate with `python -m screener.validation`; the table below is the
-> committed run (S&P 500 current constituents, 2012–2025, monthly rebalance,
-> D10 − D1 equal-weight spread). **See FINDINGS.md for the full memo.**
+> committed run (S&P 500 current constituents as of Oct 2026, 2012–2025,
+> monthly rebalance, D10 − D1 equal-weight spread; rebuilt 2026-10-03 — see
+> FINDINGS.md "Rebuild of 2026-10-03" for what moved and why). **See
+> FINDINGS.md for the full memo.**
 
 <!-- VALIDATION_TABLE_START -->
 | Strategy | Ann. return | Ann. Sharpe | NW t-stat | DSR | Survives 95%? |
 |---|---|---|---|---|---|
-| Piotroski F-Score | −1.7% | −0.18 | −0.69 | 0.043 | No |
-| Altman Z-Score | −4.1% | −0.42 | −1.50 | 0.004 | No |
-| Ohlson O-Score | −6.0% | −0.82 | −3.00 | 0.000 | No |
-| **Composite (LASSO)** | **−0.7%** | **−0.08** | **−0.29** | **0.092** | **No** |
+| Piotroski F-Score | −2.8% | −0.29 | −1.18 | 0.016 | No |
+| Altman Z-Score | −4.4% | −0.45 | −1.58 | 0.003 | No |
+| Ohlson O-Score | −7.1% | −0.95 | −3.71 | 0.000 | No |
+| **Composite (LASSO)** | **−3.4%** | **−0.32** | **−1.22** | **0.012** | **No** |
 
 **Honest headline: nothing survives.** The composite's edge does not exist
 in large-cap US equities post-2012 — the walk-forward LASSO mostly shrinks
@@ -36,8 +38,8 @@ survivorship-corrected re-runs, that bar is never cleared:
 
 | Market | Months | Composite ann. | NW t | DSR | Survives? |
 |---|---|---|---|---|---|
-| US — S&P 500 | 167 | −0.7% | −0.29 | 0.092 | No |
-| US, survivorship-corrected | 167 | −1.3% | −0.42 | 0.067 | No |
+| US — S&P 500 | 167 | −3.4% | −1.22 | 0.012 | No |
+| US, survivorship-corrected | 167 | −3.0% | −0.91 | 0.020 | No |
 | Korea — KOSPI 120 | 105 | +2.4% | +0.33 | 0.238 | No |
 | Korea, survivorship-corrected | 105 | +2.4% | +0.33 | 0.238 | No |
 | India — BSE 100 | 26 † | +2.1% † | +0.34 † | 0.233 † | No † |
@@ -63,8 +65,8 @@ universe too:
 
 | Run | Windows | Clears DSR hurdle | Breaches negative hurdle | Median hurdle | Mean spread |
 |---|---|---|---|---|---|
-| US S&P 500 (static) | 144 | **0 / 144** | 1 / 144 | +18.5%/yr | −0.1%/yr |
-| US, survivorship-corrected | 144 | 20 / 144 † | **27 / 144** | +8.5%/yr | −0.5%/yr |
+| US S&P 500 (static) | 144 | **0 / 144** | 0 / 144 | +20.1%/yr | −2.7%/yr |
+| US, survivorship-corrected | 144 | 0 / 144 † | 0 / 144 | +21.3%/yr | −1.8%/yr |
 | Korea KOSPI 120 | 82 | **12 / 82** — all Feb 2019 – May 2020 | 19 / 82 | +13.9%/yr | −2.1%/yr |
 | Korea, survivorship-corrected | 82 | identical to static | | | |
 | **India BSE 100** ‡ | **3** | 0 / 3 | 0 / 3 | +17.9%/yr | +2.3%/yr |
@@ -78,7 +80,7 @@ Rolling spread by window-year:
 
 | | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **US** | −21% | −19% | −3% | +4% | +6% | +5% | +3% | +2% | +3% | +2% | −2% | −1% | +0% |
+| **US** | −22% | −18% | −1% | +5% | +4% | +4% | +3% | +1% | −8% | −10% | −4% | −1% | −3% |
 | **Korea** | | | | | | | **+24%** | +8% | −14% | −26% | −2% | −1% | −2% |
 
 **Korea shows real decay** — an early stretch beating a
@@ -86,14 +88,17 @@ multiple-testing-corrected benchmark, then five years that do not. **The US
 never clears the bar in its headline configuration**, so the two fail in
 genuinely different ways.
 
-† **Do not read the corrected-US row as a positive result.** Its 20
-clearing windows are outnumbered by 27 significantly *negative* ones, and
-the full-sample verdict on that exact series is composite −1.3%/yr, t
-−0.42, DSR 0.067 — a decisive failure. A null series with time-varying
-volatility will throw off stretches that clear a 95% bar; quoting them is
-the selection error the DSR exists to prevent. Full discussion in
-[FINDINGS.md](FINDINGS.md), along with the caveat that Korea's clearing
-windows lean partly on its thinnest cross-sections.
+† **The corrected-US row used to show 20 clearing windows, and this memo
+argued against believing them.** That July 2026 run also had 27
+significantly *negative* windows, and its full-sample verdict was a
+decisive failure. The 2026-10-03 rebuild (updated constituent-changes
+table, re-downloaded prices) has 0 clearing and 0 negative windows, and
+the full-sample composite is −3.0%/yr, t −0.91, DSR 0.020. Stretches that
+disappear on a data refresh are what a null series with time-varying
+volatility produces; quoting them would have been the selection error the
+DSR exists to prevent. Full discussion in [FINDINGS.md](FINDINGS.md), along
+with the caveat that Korea's clearing windows lean partly on its thinnest
+cross-sections.
 
 View any of them with e.g. `python -m dashboard.app --universe sp500` →
 "Rolling spread".
@@ -114,10 +119,10 @@ python -m screener.validation --universe sp500 --survivorship
 
 | Strategy | Static | Corrected |
 |---|---|---|
-| Piotroski F-Score | −1.7% | −1.3% |
-| Altman Z-Score | −4.1% | −5.4% |
-| Ohlson O-Score | −6.0% | −4.2% |
-| **Composite** | **−0.7%** | **−1.3%** |
+| Piotroski F-Score | −2.8% | −1.5% |
+| Altman Z-Score | −4.4% | −4.6% |
+| Ohlson O-Score | −7.1% | −4.4% |
+| **Composite** | **−3.4%** | **−3.0%** |
 
 The correction moves individual scores in both directions and changes no
 conclusion: nothing survives Deflated Sharpe either way.

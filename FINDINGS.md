@@ -14,8 +14,8 @@ bottom bucket:
 
 | Market | Names | Buckets | Months | Ann. return | NW t | DSR | Survives 95%? |
 |---|---|---|---|---|---|---|---|
-| **US** — S&P 500 | 503 | deciles | 167 | −0.7% | −0.29 | 0.092 | **No** |
-| US, survivorship-corrected | 294→493 | deciles | 167 | −1.3% | −0.42 | 0.067 | **No** |
+| **US** — S&P 500 | 503 | deciles | 167 | −3.4% | −1.22 | 0.012 | **No** |
+| US, survivorship-corrected | 294→488 | deciles | 167 | −3.0% | −0.91 | 0.020 | **No** |
 | US — Russell 3000 (top 300, consistency check) | 300 | deciles | 167 | +0.4% | +0.10 | 0.170 | **No** |
 | **US** — Russell 3000 (full universe) | 2,547 | deciles | 167 | +13.2% | +2.32 | 0.988 | **"Yes" ‡** |
 | **Korea** — KOSPI 120 | 120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** |
@@ -67,12 +67,40 @@ genuine non-survivors.**
 
 ## Validation summary — S&P 500 (the primary sample)
 
+### Rebuild of 2026-10-03
+
+Every S&P 500 number in this memo comes from a rebuild on 2026-10-03; the
+earlier figures were from runs on 2026-07-13 (static) and 2026-07-27
+(survivorship-corrected). The method is unchanged. Three inputs moved:
+
+- **Today's constituent list.** The static universe is today's S&P 500
+  applied backwards, and roughly a dozen names have changed since July
+  (e.g. FERG replaced EA; BE, P and ILMN replaced TAP, TTD and BLDR on
+  2026-09-21). The five new names with EDGAR filings were ingested into
+  the PIT database before the rebuild.
+- **The constituent-changes table.** Wikipedia moved it from "List of S&P
+  500 companies" into its own article, "Historical components of the S&P
+  500", on 2026-08-11; `screener/universe.py` now reads it from there.
+- **Prices**, re-downloaded from Yahoo for the new ticker set.
+
+The verdict does not change — nothing survives Deflated Sharpe in either
+configuration — but individual numbers moved further than a dozen names
+out of 501 might suggest. The static composite went from −0.7%/yr
+(t −0.29) to −3.4%/yr (t −1.22), and the corrected run's 20 rolling windows
+that cleared the DSR hurdle went to zero (see "Rolling out-of-sample
+decay" below). That sensitivity to a data refresh is itself a finding: the
+full-sample point estimates here are not stable to the second decimal, and
+nothing in this memo should be quoted as if they were.
+
+Coverage did not move: 120–152 names were fully scored per month in 2012
+and 306 in December 2025 in the July run, against 121–153 and 307 now.
+
 | Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat (lag 4) | Skew | Kurtosis | DSR | Survives 95%? |
 |---|---|---|---|---|---|---|---|
-| Piotroski F-Score | −1.7% | −0.18 | −0.69 | −0.39 | 3.80 | 0.043 | **No** |
-| Altman Z-Score | −4.1% | −0.42 | −1.50 | −0.19 | 3.86 | 0.004 | **No** |
-| Ohlson O-Score | −6.0% | −0.82 | −3.00 | −0.44 | 4.47 | 0.000 | **No** |
-| Composite (LASSO) | −0.7% | −0.08 | −0.29 | −0.51 | 3.25 | 0.092 | **No** |
+| Piotroski F-Score | −2.8% | −0.29 | −1.18 | −0.15 | 2.90 | 0.016 | **No** |
+| Altman Z-Score | −4.4% | −0.45 | −1.58 | −0.19 | 3.79 | 0.003 | **No** |
+| Ohlson O-Score | −7.1% | −0.95 | −3.71 | −0.91 | 6.58 | 0.000 | **No** |
+| Composite (LASSO) | −3.4% | −0.32 | −1.22 | −0.33 | 4.32 | 0.012 | **No** |
 
 Newey-West lag chosen by floor(4·(T/100)^(2/9)) = 4. The Deflated Sharpe
 Ratio uses N_trials = 4 (F, Z, O, composite — the honest count of related
@@ -85,7 +113,7 @@ each spread series.
 positive decile spread in the large-cap US universe after 2012 — let alone
 one that survives multiple-testing correction.** The point estimates are
 mildly negative across the board. The starkest result is the O-Score: the
-"safe minus distressed" spread lost ~6%/yr with a NW t-stat of −3.0. In
+"safe minus distressed" spread lost ~7%/yr with a NW t-stat of −3.7. In
 this sample, sector-neutral distress ranking was a *contrarian* signal —
 consistent with the post-publication literature on the distress-risk
 anomaly and with the QE-era pattern of junk-led rallies inside the S&P 500.
@@ -96,37 +124,37 @@ whole sample, there is effectively no gradient at all:
 
 | Decile | 1 (worst) | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 (best) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Ann. return | 21.0% | 18.3% | 18.6% | 20.1% | 16.0% | 19.5% | 18.4% | 20.1% | 18.2% | 20.3% |
+| Ann. return | 23.3% | 18.7% | 18.9% | 17.9% | 17.5% | 19.8% | 17.9% | 18.8% | 18.4% | 19.8% |
 
-Decile 1 (worst composite score) had one of the *highest* mean returns of
-any decile, and decile 5 (middle) had the lowest — correlation between
-decile rank and mean return across the full sample is essentially zero
-(ρ = −0.02). Restricting to 2019 onward, once the scored universe is large
-enough (see coverage below) for deciles to hold more than a handful of
-names, the correlation turns weakly positive (ρ = 0.16) — a hint of the
-expected monotonic gradient, but far too weak to call an effect: it is not
-statistically distinguishable from noise once look at through the NW/DSR
-lens, and it never translates into a full-period decile-spread number that
-clears significance.
+Decile 1 (worst composite score) had the *highest* mean return of any
+decile, and decile 5 (middle) the lowest — the rank correlation between
+decile and mean return across the full sample is essentially zero
+(Spearman ρ = −0.07). Restricting to 2019 onward, once the scored universe
+is large enough (see coverage below) for deciles to hold more than a
+handful of names, the correlation is ρ = −0.52: if there is a gradient in
+the well-covered period, it runs the wrong way. (The July run put this
+figure at +0.16, which the earlier draft of this memo read as "a hint of
+the expected gradient." It did not survive the rebuild, and with ten
+points it was never more than a hint either way.)
 
 **Annual D10−D1 spread by calendar year** makes the composite's full-sample
 number look worse than the post-2018 regime alone would suggest:
 
 | Year | 2012 | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Spread | −11.3% | −27.0% | +0.2% | +6.2% | +8.9% | +4.9% | +3.3% | +4.8% | −1.3% | −1.6% | +2.3% | −0.2% | −0.1% | −0.4% |
+| Spread | −10.4% | −29.0% | +4.9% | +6.7% | +4.1% | +3.5% | +5.7% | −6.8% | −12.7% | −4.3% | −0.6% | −0.8% | −4.4% | −5.4% |
 
-The two catastrophic years (2012: −11.3%, 2013: −27.0%) coincide exactly
-with the thinnest part of the sample: only **120–153 companies** had a full
+The two catastrophic years (2012: −10.4%, 2013: −29.0%) coincide exactly
+with the thinnest part of the sample: only **121–153 companies** had a full
 composite score each month in 2012 (out of 501), so each decile held on the
 order of 12–15 names — a sample size where one or two large idiosyncratic
-moves can dominate a "decile average." 2014–2019 was consistently positive
-(if modest); 2020–2025, once coverage plateaus above 250–350 names/month,
-the spread is essentially flat, oscillating within ±2.3%/yr with no
-sustained direction either way. **The honest read is not "the effect
-decayed" so much as "the effect was never reliably there, and the earliest,
-noisiest years are doing most of the work in the negative full-sample
-number."**
+moves can dominate a "decile average." 2014–2018 was consistently positive
+(if modest). But 2019–2025, once coverage plateaus around 250–300
+names/month, is negative in every single year (−0.6% to −12.7%). **The
+honest read is not "the effect decayed" — it is "the effect was never
+reliably there."** An earlier draft of this memo attributed most of the
+negative full-sample number to the thin 2012–2013 years; after the rebuild
+the well-covered second half is the larger drag, so that excuse is gone.
 
 ### Why coverage is what it is
 
@@ -143,7 +171,7 @@ exclude). Altman and Ohlson need fewer tags and are less exposed to the
 gross-margin gap, hence their consistently lower exclusion rates (~20–50%
 vs. Piotroski's ~39–70%).
 
-**Financials (76 of 503 constituents) and most REITs (part of the 31 Real
+**Financials (76 of 503 constituents) and most REITs (part of the 30 Real
 Estate names) are excluded from all three scores by construction, every
 year, regardless of tagging quality** — banks and REITs don't file
 classified balance sheets, so `AssetsCurrent`/`LiabilitiesCurrent` simply
@@ -161,16 +189,16 @@ O-Score, all sector-neutral and sign-aligned so higher = better):
 
 | Refit date | α | F-Score | Z-Score | O-Score |
 |---|---|---|---|---|
-| 2014-01 | 0.0001 | −0.0304 | +0.0045 | −0.0248 |
-| 2015-01 | 0.0030 | −0.0185 | −0.0009 | −0.0120 |
-| 2016-01 | 0.0100 | −0.0057 | −0.0000 | −0.0093 |
-| 2017-01 | 0.0100 | −0.0029 | −0.0000 | −0.0062 |
-| 2018-01 | 0.0100 | −0.0006 | −0.0000 | −0.0053 |
-| 2019-01 | 0.0100 | −0.0015 | −0.0000 | −0.0052 |
-| 2020-01 | 0.0100 | −0.0000 | +0.0000 | −0.0045 |
+| 2014-01 | 0.0001 | −0.0301 | +0.0049 | −0.0259 |
+| 2015-01 | 0.0030 | −0.0183 | −0.0000 | −0.0137 |
+| 2016-01 | 0.0100 | −0.0041 | −0.0000 | −0.0081 |
+| 2017-01 | 0.0100 | −0.0019 | −0.0000 | −0.0054 |
+| 2018-01 | 0.0100 | −0.0000 | −0.0000 | −0.0044 |
+| 2019-01 | 0.0300 | 0 | 0 | 0 |
+| 2020-01 | 0.0300 | 0 | 0 | 0 |
 | 2021-01 | 0.0300 | 0 | 0 | 0 |
 | 2022-01 | 0.1000 | 0 | 0 | 0 |
-| 2023-01 | 0.0100 | −0.0000 | −0.0000 | −0.0015 |
+| 2023-01 | 0.0100 | −0.0000 | −0.0000 | −0.0016 |
 | 2024-01 | 0.0100 | 0 | 0 | 0 |
 | 2025-01 | 0.0100 | 0 | 0 | 0 |
 
@@ -186,23 +214,24 @@ consistent with the annual O-Score spread finding above (distress ranking
 was contrarian) and explains why the composite's realized spread, while
 still negative, is closer to zero than the O-Score alone: the LASSO is
 partially cancelling a signal it (correctly, given the training data)
-believes points the wrong way, and by 2021 the CV-selected α (0.03–0.1, an
-order of magnitude higher than the 2014–2020 values) shrinks everything to
-zero outright.
+believes points the wrong way, and from 2019 the CV-selected α (0.03–0.1,
+three to ten times the 2016–2018 value) shrinks everything to zero outright,
+apart from a negligible O-Score weight at the 2023 refit.
 
 ## Decay
 
-The full-period cumulative composite spread is −15.9%, split −16.7% in the
-first half (2012–2018) and +1.0% in the second (2019–2025). Combined with
+The full-period cumulative composite spread is −43.6%, split −16.7% in the
+first half (2012–2018) and −32.3% in the second (2019–2025). Combined with
 the annual breakdown above, this is better read as "no reliable effect at
-any point, with a very noisy, thin-sample-driven drawdown concentrated in
-2012–2013" rather than "a real effect that decayed."
+any point" than "a real effect that decayed": the first half's losses are
+concentrated in the thin 2012–2013 cross-sections, and the second half
+loses steadily with no single bad year driving it.
 
 The rolling 24-month annualized spread (dashboard "Rolling spread" tab, 144
-overlapping windows) averages −0.1%/yr with a standard deviation of 7.0
-points, ranging from −22.7% (window ending Feb 2014 — still inside the
-noisy thin-coverage period) to +9.0% (window ending Feb 2017). Only **6.0%
-of the 144 rolling windows** have a ±1.96-SE band that excludes zero — i.e.
+overlapping windows) averages −2.7%/yr with a standard deviation of 7.5
+points, ranging from −22.8% (window ending Feb 2014 — still inside the
+noisy thin-coverage period) to +8.3% (window ending Oct 2018). Only **5.6%
+of the 144 rolling windows** (8) have a ±1.96-SE band that excludes zero — i.e.
 in 94% of 24-month windows, the spread is statistically indistinguishable
 from no effect at all, exactly what the full-sample NW t-stat and DSR
 already imply, just visualized month by month.
@@ -246,8 +275,9 @@ constructed example.
    sheet means no `AssetsCurrent`/`LiabilitiesCurrent`. Combined with
    missing-tag exclusion (worst for Piotroski, driven mainly by
    `GrossProfit`/`CostOfRevenue` coverage of ~42%/23%), fully-scored
-   coverage ran ~120–153 names/month in 2012, crossing 250 around 2019 and
-   reaching ~350+ by 2025 (out of 501 constituents with price history).
+   coverage ran ~121–153 names/month in 2012, crossing 250 during 2019 and
+   reaching ~300–307 by 2025 (out of 501 constituents with price history;
+   an earlier draft said ~350+, which the run logs never supported).
 6. **Total liabilities fallback** (Assets − StockholdersEquity) puts
    noncontrolling interests into liabilities, slightly overstating leverage
    for consolidated groups.
@@ -624,7 +654,7 @@ rather than deciles because 120 names split ten ways leaves ~9 per bucket.
 **Nothing survives in Korea either — but the failure has a different
 shape, which is the interesting part.** In the US every one of the four
 strategies had a *negative* point estimate, and the O-Score's was
-significantly negative (t = −3.0): distress ranking was actively
+significantly negative (t = −3.7): distress ranking was actively
 contrarian. In Korea the Piotroski F-Score is *positive* (+5.9%/yr, the
 best Sharpe of any score in either market) and the quintile returns are
 close to monotone across the top four buckets — D5 19.6% > D4 15.7% >
@@ -714,48 +744,53 @@ period after. The strongest stretch therefore leans partly on the thinnest
 data, and some of that +24% is likely small-cross-section noise rather than
 signal.
 
-**US (144 windows, Dec 2013 – Nov 2025), median hurdle +18.5%/yr:**
+**US (144 windows, Dec 2013 – Nov 2025), median hurdle +20.1%/yr (static), +21.3%/yr (corrected):**
 
 | Window year | 2013 | 2014 | 2015 | 2016 | 2017 | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Static | −21% | −19% | −3% | +4% | +6% | +5% | +3% | +2% | +3% | +2% | −2% | −1% | +0% |
-| Surv.-corrected | −23% | −19% | −0% | +12% | +6% | +2% | +4% | +4% | −4% | −9% | −1% | +0% | +0% |
+| Static | −22% | −18% | −1% | +5% | +4% | +4% | +3% | +1% | −8% | −10% | −4% | −1% | −3% |
+| Surv.-corrected | −29% | −24% | +0% | +11% | +5% | +2% | +1% | +2% | −5% | −9% | −1% | +0% | −1% |
 
-**The static US run clears the hurdle in 0 of 144 windows.** Its shape is
-also different from Korea's: a deep negative patch in 2013–2015 driven by
-the thin early cross-section (120–150 scored names), then a mildly positive
-plateau of +2% to +6% from 2016–2022 that never approaches the +18.5%
-hurdle, then back to flat. No decay, because there was never anything to
-decay from.
+**The static US run clears the hurdle in 0 of 144 windows, and breaches
+the negative one in 0.** Its shape is also different from Korea's: a deep
+negative patch in 2013–2014 driven by the thin early cross-section (120–150
+scored names), then a mildly positive plateau of +1% to +5% from 2016–2020
+that never approaches the +20.1% hurdle, then a negative stretch in
+2021–2023 (−4% to −10%) that never reaches the negative hurdle either. No
+decay, because there was never anything to decay from.
 
-### A result worth not overselling: the corrected US run *does* clear 20 windows
+### The corrected US run's 20 clearing windows, and why they are gone
 
-The survivorship-corrected US series behaves differently enough to be worth
-recording. **20 of its 144 windows clear the DSR hurdle** — all ending
-between September 2015 and July 2020, with realized spreads of +8.8% to
-+15.4% against hurdles of 5.5% to 10.1%. The static and corrected spread
-series correlate only 0.459, so they are genuinely different series rather
-than a rescaling: the corrected universe drops ~40% of names in the early
-years, and its rolling volatility is lower through that stretch, which
-lowers the hurdle enough for the mid-decade spread to clear it.
+The July 2026 survivorship-corrected run behaved differently enough to be
+recorded: **20 of its 144 windows cleared the DSR hurdle**, all ending
+between September 2015 and July 2020. This memo argued at the time that
+they should not be presented as a positive finding, for two reasons:
 
-It would be easy to present that as the project's one positive finding. It
-is not, for two reasons stated together:
+1. In the same run, **27 of 144 windows breached the NEGATIVE hurdle** —
+   more significantly-bad stretches (19%) than significantly-good ones
+   (14%).
+2. The full-sample verdict on exactly that series was unambiguous:
+   composite annualized −1.3%, Newey-West t −0.42, DSR 0.067.
 
-1. In the same corrected run, **27 of 144 windows breach the NEGATIVE
-   hurdle** — more significantly-bad stretches (19%) than
-   significantly-good ones (14%).
-2. The full-sample verdict on exactly this series is unambiguous: composite
-   annualized −1.3%, Newey-West t −0.42, **DSR 0.067**. It fails decisively.
+The 2026-10-03 rebuild settles it. With the updated changes table and
+re-downloaded prices, the corrected series clears the hurdle in **0 of 144**
+windows and breaches the negative one in **0 of 144**. Its best stretch
+(window-year 2016, +11%/yr on average, peaking at +14.3% in the window
+ending April 2016) sits far below a median hurdle of +21.3%. The
+full-sample composite is −3.0%/yr, t −0.91, DSR 0.020. The static and
+corrected monthly spread series correlate 0.62, so they remain genuinely
+different series rather than a rescaling — the correction drops ~40% of
+names in the early years.
 
-That combination is precisely the pathology the Deflated Sharpe Ratio
-exists to catch. A null series with time-varying volatility will produce
-stretches that clear a 95% bar; selecting those stretches after the fact is
-itself a testing decision, and one the DSR's N_trials = 4 does not account
-for. The rolling chart is a diagnostic for *shape*, not a licence to quote
-its best windows. Read on the whole sample — which is the only reading that
-is not conditioned on the outcome — the corrected US composite is the
-second-worst of the eight strategy-market pairs in this memo.
+That is the pathology the Deflated Sharpe Ratio exists to catch, observed
+directly rather than argued. A null series with time-varying volatility
+produces stretches that clear a 95% bar, and those stretches move when the
+inputs are refreshed; selecting them after the fact is itself a testing
+decision that the DSR's N_trials = 4 does not account for. The rolling
+chart is a diagnostic for *shape*, not a licence to quote its best windows.
+Read on the whole sample — the only reading not conditioned on the outcome
+— the corrected US composite is the second-worst of the eight
+strategy-market pairs in this memo, ahead only of the static US run.
 
 Korea static and corrected produce identical rolling series, for the reason
 established in the survivorship section: the listing gate removed only
@@ -763,9 +798,9 @@ company-months that had no computable score.
 
 The Korea-versus-US contrast survives all of this. Korea's decay is a
 first-half/second-half collapse (−0.1%/yr to −4.1%/yr) with every clearing
-window in the first 16 months of the sample. The US never clears at all in
-its headline configuration. That distinction only becomes visible with a
-DSR-derived band; a plain SE band flags 11% of Korean and 7% of US windows
+window in the first 16 months of the sample. The US never clears at all, in
+either configuration. That distinction only becomes visible with a
+DSR-derived band; a plain SE band flags 11% of Korean and 6% of US windows
 and obscures it.
 
 ### India: the same chart, produced deliberately against the odds, and barely a chart at all
@@ -808,10 +843,11 @@ Both markets were re-run with each rebalance restricted to names actually
 listed then (`--survivorship`, writing to separate `*_pit` outputs so the
 two runs can be compared rather than one overwriting the other).
 
-**S&P 500.** Wikipedia's constituent-changes table, unwound backwards,
-shrinks the January-2012 cross-section from 503 names to 294. Annualised
-D10−D1 by strategy, static vs corrected: F-Score −1.7% → −1.3%, Z-Score
-−4.1% → −5.4%, O-Score −6.0% → −4.2%, composite −0.7% → −1.3%. The
+**S&P 500.** Wikipedia's constituent-changes table (now its own article,
+"Historical components of the S&P 500"), unwound backwards, shrinks the
+January-2012 cross-section from 503 names to 294. Annualised D10−D1 by
+strategy, static vs corrected: F-Score −2.8% → −1.5%, Z-Score −4.4% →
+−4.6%, O-Score −7.1% → −4.4%, composite −3.4% → −3.0%. The
 correction moves individual scores in *both* directions — it is not a
 uniform haircut — and changes no conclusion: nothing survives Deflated
 Sharpe either way.
@@ -961,7 +997,7 @@ kind of PIT-fake the rest of this project's discipline exists to prevent.
 
 As a *screener* the artifact works and the infrastructure (the PIT database
 especially) is reusable. As a *strategy*, the composite's edge does not
-exist in this sample: DSR = 0.09, far below the 0.95 bar, and the honest
+exist in this sample: DSR = 0.01, far below the 0.95 bar, and the honest
 conclusion is that classical statement-score investing in large-cap US
 equities has not paid since at least 2012.
 
