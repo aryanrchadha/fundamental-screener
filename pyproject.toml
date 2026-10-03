@@ -24,6 +24,9 @@ dependencies = [
     "pyarrow>=15.0",
 ]
 
+[project.scripts]
+screener-gui = "dashboard.app:main"
+
 [project.optional-dependencies]
 test = ["pytest>=7"]
 

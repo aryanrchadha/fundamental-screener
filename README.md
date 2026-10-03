@@ -672,6 +672,34 @@ also invalidates the US/Brazil/India caches — fine if you're re-ingesting
 everything, wasteful if you only want fresher Korean data. `requests_cache`
 supports per-URL cache clearing if you need to be surgical about it.
 
+## GUI
+
+```bash
+python -m dashboard          # opens http://127.0.0.1:8050 in your browser
+```
+
+Everything the CLI does is reachable from the page:
+
+- **Universe + survivorship switcher** — S&P 500, Russell 3000, KOSPI, India,
+  without restarting. The survivorship toggle is only enabled where a real
+  point-in-time membership source exists (S&P 500, KOSPI).
+- **Run pipeline tab** — tick ingest / backtest / validation and press Run.
+  It runs exactly the commands in the section below (previewed before you
+  run), one job at a time, streams the log, and reloads every view when it
+  finishes. Ingest always passes the universe's own `--db`. Before a
+  backtest or validation step overwrites anything, the previous outputs are
+  copied to `data/backups/<timestamp>/`.
+- **Stale-result banner** — if the validation table or rolling chart is
+  older than the backtest output, the page says so: those numbers describe
+  a panel that is no longer on disk (e.g. after a 50-ticker test run).
+- **Company detail** — click any screener row (or pick a ticker) for its
+  F / Z / O / composite history and decile placement each month.
+- **CSV export** on the screener and validation tables, and a data-status
+  line showing when each artifact was last written.
+
+`python -m dashboard.app --universe kospi --survivorship` starts on a
+specific view; `--host 0.0.0.0` serves it on your network.
+
 ## Run
 
 ```bash
@@ -679,7 +707,7 @@ supports per-URL cache clearing if you need to be surgical about it.
 python -m pit_fundamentals.ingest --universe sp500   # ~30 min first run (rate-limited, resumable)
 python -m screener.backtest                          # scores, composite, buckets -> data/*.parquet
 python -m screener.validation                        # NW t-stats + DSR summary -> console + CSV
-python -m dashboard.app                              # http://localhost:8050
+python -m dashboard                                  # GUI, opens a browser tab
 
 # Russell 3000 (full ~2,580-name universe, deciles — ~10-15 min incl. rate-limit
 # retries; the composite "survives" here, see README/FINDINGS.md for why not to trust it)
