@@ -28,15 +28,19 @@ import config
 log = logging.getLogger(__name__)
 
 WIKI_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+# The constituent-changes table lived on the list page above until
+# 2026-08-11, when it was moved to its own article (revision 1368903137,
+# "move to [[Historical components of the S&P 500]]"). Same columns.
+WIKI_SP500_CHANGES_URL = "https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500"
 
 
-def _fetch_wiki_tables() -> list[pd.DataFrame]:
+def _fetch_wiki_tables(url: str = WIKI_SP500_URL) -> list[pd.DataFrame]:
     session = requests_cache.CachedSession(
         str(config.HTTP_CACHE_PATH), backend="sqlite",
         expire_after=config.CACHE_TTL_WIKIPEDIA,
     )
     session.headers.update({"User-Agent": config.SEC_USER_AGENT})
-    resp = session.get(WIKI_SP500_URL, timeout=60)
+    resp = session.get(url, timeout=60)
     resp.raise_for_status()
     return pd.read_html(io.StringIO(resp.text))
 
@@ -123,12 +127,13 @@ def get_russell3000_constituents() -> pd.DataFrame:
 def get_sp500_changes() -> pd.DataFrame:
     """Historical constituent changes: columns [date, added, removed].
 
-    Parsed from Wikipedia's "Selected changes" table. NOTE (documented
-    limitation): Wikipedia labels this table 'selected' — early-year coverage
-    is incomplete, which is why survivorship correction is an optional
-    toggle rather than the default.
+    Parsed from Wikipedia's constituent-changes table (formerly "Selected
+    changes" on the list page, now its own article — see
+    WIKI_SP500_CHANGES_URL). NOTE (documented limitation): early-year
+    coverage is incomplete, which is why survivorship correction is an
+    optional toggle rather than the default.
     """
-    tables = _fetch_wiki_tables()
+    tables = _fetch_wiki_tables(WIKI_SP500_CHANGES_URL)
     changes = None
     for t in tables:
         cols = ["".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
@@ -137,7 +142,7 @@ def get_sp500_changes() -> pd.DataFrame:
             changes.columns = cols
             break
     if changes is None:
-        raise RuntimeError("Could not locate S&P 500 changes table on Wikipedia")
+        raise RuntimeError(f"Could not locate S&P 500 changes table at {WIKI_SP500_CHANGES_URL}")
     added_col = next(c for c in changes.columns if c.startswith("Added"))
     removed_col = next(c for c in changes.columns if c.startswith("Removed"))
     date_col = next(c for c in changes.columns if "Date" in c)
