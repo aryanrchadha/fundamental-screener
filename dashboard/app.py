@@ -20,11 +20,12 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, dash_table, dcc, html, no_update
+from dash import Dash, Input, Output, State, dcc, html, no_update
 from plotly.subplots import make_subplots
 
 import config
 from dashboard import analysis
+from dashboard.grids import col, grid, register_exports, row_rule
 from dashboard.jobs import RUNNER, STEPS, step_commands, survivorship_supported
 from screener.universes import UNIVERSES, Universe, get_universe
 
@@ -327,18 +328,16 @@ def render_views(uni: Universe) -> dict:
     panel, dec, summary, roll = data
     stale = stale_warning(uni)
     if summary is not None:
-        s = summary.round(3).reset_index()
+        s = summary.reset_index()
         validation = [
             stale,
             html.H4(f"Newey-West / Deflated Sharpe summary (D{uni.n_buckets} − D1)"),
-            dash_table.DataTable(
-                data=s.astype({"survives_95": str}).to_dict("records"),
-                columns=[{"name": c, "id": c} for c in s.columns],
-                export_format="csv", style_table={"overflowX": "auto"},
-                style_cell={"fontFamily": "monospace", "fontSize": 13},
-                style_data_conditional=[{"if": {"filter_query": "{survives_95} = True"},
-                                         "backgroundColor": "#e6f4ea", "fontWeight": "bold"}],
-            ),
+            grid("validation-grid", [
+                col("strategy", minWidth=170), col("months"), col("ann_return", "pct1"),
+                col("ann_sharpe", "num3"), col("nw_tstat", "num3"), col("nw_lag"),
+                col("skew", "num3"), col("kurtosis", "num3"), col("dsr", "num3"),
+                col("dsr_pvalue", "num3"), col("survives_95"),
+            ], s.to_dict("records"), row_rules=VERDICT_RULES),
             html.P("survives_95 = Deflated Sharpe Ratio > 0.95 after correcting for "
                    "4 related trials (F, Z, O, composite) with empirical skew/kurtosis."),
         ]
@@ -402,26 +401,16 @@ def _pipeline_panel(uni: Universe) -> html.Div:
     ])
 
 
-_MONO = {"fontFamily": "monospace", "fontSize": 13}
-_PCT = dash_table.FormatTemplate.percentage(1)
+VERDICT_RULES = [
+    row_rule("params.data.survives_95 === true", backgroundColor="#e6f4ea", fontWeight="bold"),
+    row_rule("params.data.stale === true", color="#b00"),
+]
+VERDICT_COLS = [col("scenario", minWidth=260), col("months"), col("ann_return", "pct1"),
+                col("nw_tstat", "num3"), col("dsr", "num3"), col("survives_95")]
 
-
-def _pct_cols(cols, pct=(), num=()):
-    out = []
-    for c in cols:
-        spec = {"name": c, "id": c}
-        if c in pct:
-            spec.update(type="numeric", format=_PCT)
-        elif c in num:
-            spec.update(type="numeric", format=dash_table.Format.Format(precision=3,
-                        scheme=dash_table.Format.Scheme.fixed))
-        out.append(spec)
-    return out
-
-
-def _verdict_styles():
-    return [{"if": {"filter_query": "{survives_95} = true"}, "backgroundColor": "#e6f4ea", "fontWeight": "bold"},
-            {"if": {"filter_query": "{stale} = true"}, "color": "#b00"}]
+# Every grid in the app, for register_exports (see its docstring).
+GRID_IDS = ["screener-table", "validation-grid", "month-table", "rob-table", "cost-table",
+            "watch-table", "overview-grid"]
 
 
 def overview_panel(universes=None) -> list:
@@ -433,11 +422,11 @@ def overview_panel(universes=None) -> list:
                "Red rows are stale (validation older than the backtest). Returns are "
                "in each market's own currency, so levels are not comparable across rows; "
                "the verdicts are.", style={"marginTop": "1em"}),
-        dash_table.DataTable(
-            data=df.to_dict("records"), sort_action="native", export_format="csv",
-            columns=_pct_cols(df.columns, pct=("ann_return",), num=("nw_tstat", "dsr")),
-            style_cell=_MONO, style_table={"overflowX": "auto"},
-            style_data_conditional=_verdict_styles()),
+        grid("overview-grid", [
+            col("universe"), col("mode", minWidth=170), col("currency"), col("months"),
+            col("ann_return", "pct1"), col("nw_tstat", "num3"), col("dsr", "num3"),
+            col("survives_95"), col("stale"),
+        ], df.to_dict("records"), row_rules=VERDICT_RULES),
         html.P("India is absent by design: it is screener-only and produces no validation table.",
                style={"color": "#666", "fontSize": 13}),
     ]
@@ -510,13 +499,11 @@ def month_panel(options=(), value=None) -> list:
                                clearable=False, style={"width": "160px"})],
                  style={"display": "flex", "alignItems": "center", "gap": "0.5em"}),
         html.Div(id="month-summary", style={"margin": "0.8em 0"}),
-        dash_table.DataTable(
-            id="month-table", page_size=20, sort_action="native", filter_action="native",
-            export_format="csv", style_cell=_MONO, style_table={"overflowX": "auto"},
-            columns=_pct_cols(["ticker", "sector", "bucket", "fwd_ret_1m", "contribution"],
-                              pct=("fwd_ret_1m", "contribution")),
-            style_data_conditional=[{"if": {"filter_query": "{contribution} > 0.02 || {contribution} < -0.02"},
-                                     "backgroundColor": "#fff3cd"}]),
+        grid("month-table", [
+            col("ticker"), col("sector", minWidth=170), col("bucket"),
+            col("fwd_ret_1m", "pct1"), col("contribution", "pct1"),
+        ], page_size=20, row_rules=[row_rule("Math.abs(params.data.contribution) > 0.02",
+                                             backgroundColor="#fff3cd")]),
         html.P("contribution = the name's next-month return ÷ its bucket size, + for the top bucket "
                "and − for the bottom, so the column sums to the month's spread. Highlighted names "
                "moved the spread by more than 2 points on their own.",
@@ -542,11 +529,7 @@ def robustness_panel() -> list:
                   dcc.Dropdown(id="rob-sectors", multi=True, placeholder="none",
                                style={"minWidth": "320px"})],
                  style={"display": "flex", "alignItems": "center", "gap": "0.5em", "margin": "0.6em 0"}),
-        dash_table.DataTable(
-            id="rob-table", style_cell=_MONO, style_table={"overflowX": "auto"}, export_format="csv",
-            columns=_pct_cols(["scenario", "months", "ann_return", "nw_tstat", "dsr", "survives_95"],
-                              pct=("ann_return",), num=("nw_tstat", "dsr")),
-            style_data_conditional=_verdict_styles()),
+        grid("rob-table", VERDICT_COLS, row_rules=VERDICT_RULES),
         dcc.Graph(id="rob-graph"),
         dcc.Graph(id="rob-sector-graph"),
         html.Div(style={**_BOX, "fontSize": 13}, children=[
@@ -559,8 +542,11 @@ def robustness_panel() -> list:
     ]
 
 
-SCREENER_COLS = ["ticker", "sector", "f_score", "z_score", "o_score", "o_default_prob",
-                 "composite_score", "decile"]
+SCREENER_GRID_COLS = [
+    col("ticker", pinned="left"), col("sector", minWidth=170), col("f_score"),
+    col("z_score", "num3"), col("o_score", "num3"), col("o_default_prob", "pct3", header="P(default)"),
+    col("composite_score", "num3"), col("decile"),
+]
 
 
 def screener_rows(uni: Universe, screens) -> tuple[list, str]:
@@ -573,8 +559,8 @@ def screener_rows(uni: Universe, screens) -> tuple[list, str]:
                f"{len(shown)} of {len(xsec)} names")
     if screens:
         caption += " pass " + " AND ".join(SCREENS[k][0] for k in screens)
-    caption += (". Filter boxes accept e.g. >5 or contains Tech. Click a row to open that "
-                "company's history; Export downloads the filtered table as CSV.")
+    caption += (". Click a column header to sort; the box under it filters. Click a row to "
+                "open that company's history; Export CSV saves the filtered, sorted table.")
     return shown.to_dict("records"), caption
 
 
@@ -587,11 +573,7 @@ def costs_panel() -> list:
                     dcc.Input(id="cost-bps", type="number", value=30, min=0, max=500, step=1,
                               debounce=True, style={"width": "5em"})]),
         html.Div(id="cost-summary", style={"margin": "0.8em 0"}),
-        dash_table.DataTable(
-            id="cost-table", style_cell=_MONO, style_table={"overflowX": "auto"}, export_format="csv",
-            columns=_pct_cols(["scenario", "months", "ann_return", "nw_tstat", "dsr", "survives_95"],
-                              pct=("ann_return",), num=("nw_tstat", "dsr")),
-            style_data_conditional=_verdict_styles()),
+        grid("cost-table", VERDICT_COLS, row_rules=VERDICT_RULES),
         dcc.Graph(id="cost-graph"),
         dcc.Graph(id="turnover-graph"),
         html.P("Turnover compares target equal weights rebalance to rebalance, ignoring "
@@ -617,11 +599,11 @@ def watchlist_panel() -> list:
         ]),
         dcc.Store(id="watch-store", storage_type="local"),
         dcc.Graph(id="watch-graph"),
-        dash_table.DataTable(
-            id="watch-table", sort_action="native", export_format="csv", style_cell=_MONO,
-            style_table={"overflowX": "auto"},
-            columns=_pct_cols(["ticker", "sector", "as_of_date", "f_score", "z_score", "o_score",
-                               "composite_score", "decile", "decile_12m_ago"])),
+        grid("watch-table", [
+            col("ticker"), col("sector", minWidth=170), col("as_of_date"), col("f_score"),
+            col("z_score", "num3"), col("o_score", "num3"), col("composite_score", "num3"),
+            col("decile"), col("decile_12m_ago"),
+        ]),
     ]
 
 
@@ -708,14 +690,8 @@ def build_app(universe="sp500") -> Dash:
                                            for k, (label, _) in SCREENS.items()],
                                   style={"margin": "0.8em 0", "fontSize": 13}),
                     html.P(id="screener-caption"),
-                    dash_table.DataTable(
-                        id="screener-table", data=screener_rows(uni0, [])[0],
-                        columns=[{**c, "type": "numeric", "format": dash_table.FormatTemplate.percentage(3)}
-                                 if c["id"] == "o_default_prob" else c for c in _pct_cols(SCREENER_COLS)],
-                        filter_action="native", sort_action="native", page_size=25,
-                        export_format="csv", export_headers="display",
-                        style_table={"overflowX": "auto"}, style_cell=_MONO,
-                        style_data_conditional=[{"if": {"state": "active"}, "backgroundColor": "#e8f0fe"}]),
+                    grid("screener-table", SCREENER_GRID_COLS, screener_rows(uni0, [])[0],
+                         page_size=25, row_id="ticker"),
                 ]),
                 tab("Company detail", "company", [
                     dcc.Dropdown(id="company", options=options, value=first, clearable=False,
@@ -765,7 +741,7 @@ def build_app(universe="sp500") -> Dash:
                 overview_panel(bases), mopts, mkeep)
 
     @app.callback(Output("month-graph", "figure"), Output("month-summary", "children"),
-                  Output("month-table", "data"),
+                  Output("month-table", "rowData"),
                   Input("month-date", "value"), Input("universe", "value"),
                   Input("survivorship", "value"), Input("data-version", "data"))
     def _month(date, name, surv, _version):
@@ -798,7 +774,7 @@ def build_app(universe="sp500") -> Dash:
             return no_update
         return f"{pd.Timestamp(click['points'][0]['x']):%Y-%m-%d}"
 
-    @app.callback(Output("rob-table", "data"), Output("rob-graph", "figure"),
+    @app.callback(Output("rob-table", "rowData"), Output("rob-graph", "figure"),
                   Output("rob-sector-graph", "figure"), Output("rob-sectors", "options"),
                   Input("rob-winsor", "value"), Input("rob-top", "value"),
                   Input("rob-bottom", "value"), Input("rob-exclude", "value"),
@@ -833,7 +809,7 @@ def build_app(universe="sp500") -> Dash:
         return (table.to_dict("records"), fig, fig_sector_attribution(panel, uni.n_buckets),
                 [{"label": x, "value": x} for x in all_sectors])
 
-    @app.callback(Output("cost-summary", "children"), Output("cost-table", "data"),
+    @app.callback(Output("cost-summary", "children"), Output("cost-table", "rowData"),
                   Output("cost-graph", "figure"), Output("turnover-graph", "figure"),
                   Input("cost-bps", "value"), Input("universe", "value"),
                   Input("survivorship", "value"), Input("data-version", "data"))
@@ -906,7 +882,7 @@ def build_app(universe="sp500") -> Dash:
             return no_update                 # nothing changed; avoid a write/re-fill loop
         return {**(store or {}), name: tickers}
 
-    @app.callback(Output("watch-graph", "figure"), Output("watch-table", "data"),
+    @app.callback(Output("watch-graph", "figure"), Output("watch-table", "rowData"),
                   Input("watch-tickers", "value"), Input("watch-metric", "value"),
                   Input("universe", "value"), Input("survivorship", "value"),
                   Input("data-version", "data"))
@@ -923,7 +899,9 @@ def build_app(universe="sp500") -> Dash:
         runs = [r for r in analysis.available_runs(bases) if r["key"] in (keys or [])]
         return fig_compare(analysis.cumulative_spreads(runs))
 
-    @app.callback(Output("screener-table", "data"), Output("screener-caption", "children"),
+    register_exports(app, GRID_IDS)
+
+    @app.callback(Output("screener-table", "rowData"), Output("screener-caption", "children"),
                   Input("screens", "value"), Input("universe", "value"),
                   Input("survivorship", "value"), Input("data-version", "data"))
     def _screener(screens, name, surv, _version):
@@ -939,13 +917,13 @@ def build_app(universe="sp500") -> Dash:
         return fig_company_history(data[0], ticker)
 
     @app.callback(Output("company", "value", allow_duplicate=True), Output("tabs", "value"),
-                  Input("screener-table", "active_cell"),
-                  State("screener-table", "derived_viewport_data"),
-                  prevent_initial_call=True)
-    def _row_click(cell, rows):
-        if not cell or not rows or cell["row"] >= len(rows):
+                  Input("screener-table", "cellClicked"), prevent_initial_call=True)
+    def _row_click(cell):
+        # Rows are keyed by ticker (row_id="ticker"), so the click reports it
+        # directly — no lookup through sort/filter/page state.
+        if not cell or not cell.get("rowId"):
             return no_update, no_update
-        return rows[cell["row"]]["ticker"], "company"
+        return cell["rowId"], "company"
 
     @app.callback(Output("pipe-preview", "children"),
                   Input("universe", "value"), Input("survivorship", "value"),
