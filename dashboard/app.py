@@ -16,6 +16,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -23,6 +24,7 @@ from dash import Dash, Input, Output, State, dash_table, dcc, html, no_update
 from plotly.subplots import make_subplots
 
 import config
+from dashboard import analysis
 from dashboard.jobs import RUNNER, STEPS, step_commands, survivorship_supported
 from screener.universes import UNIVERSES, Universe, get_universe
 
@@ -77,13 +79,29 @@ def fig_decile_cumret(dec: pd.DataFrame, n_buckets: int = config.N_DECILES) -> g
     return fig
 
 
-def fig_f_scatter(panel: pd.DataFrame) -> go.Figure:
+SCATTER_MAX_POINTS = 20_000
+
+
+def fig_f_scatter(panel: pd.DataFrame, max_points: int = SCATTER_MAX_POINTS) -> go.Figure:
+    """F-Score against next-month return. The OLS line is fitted on every
+    company-month; only the plotted points are sampled when there are more
+    than `max_points` (the Russell 3000 has ~400k, which the browser cannot
+    draw responsively), so the fit never depends on the sample."""
     df = panel.dropna(subset=["f_score", "fwd_ret_1m", "sector"])
-    fig = px.scatter(df, x="f_score", y="fwd_ret_1m", color="sector", opacity=0.25,
-                     trendline="ols", trendline_scope="overall",
+    n = len(df)
+    shown = df.sample(max_points, random_state=0) if n > max_points else df
+    fig = px.scatter(shown, x="f_score", y="fwd_ret_1m", color="sector", opacity=0.25,
                      labels={"f_score": "Piotroski F-Score", "fwd_ret_1m": "Next-month return"})
-    fig.update_layout(title="F-Score vs. forward 1-month return (all company-months)",
-                      yaxis_tickformat=".0%", height=550)
+    if n >= 2 and df["f_score"].nunique() > 1:
+        slope, intercept = np.polyfit(df["f_score"], df["fwd_ret_1m"], 1)
+        xs = np.array([df["f_score"].min(), df["f_score"].max()])
+        fig.add_trace(go.Scatter(x=xs, y=intercept + slope * xs, mode="lines",
+                                 name=f"OLS, all {n:,} points (slope {slope:+.2%}/pt)",
+                                 line=dict(color="black", width=2)))
+    title = "F-Score vs. forward 1-month return (all company-months)"
+    if n > max_points:
+        title += f" — showing a random {max_points:,} of {n:,}"
+    fig.update_layout(title=title, yaxis_tickformat=".0%", height=550)
     return fig
 
 
@@ -367,6 +385,120 @@ def _pipeline_panel(uni: Universe) -> html.Div:
     ])
 
 
+_MONO = {"fontFamily": "monospace", "fontSize": 13}
+_PCT = dash_table.FormatTemplate.percentage(1)
+
+
+def _pct_cols(cols, pct=(), num=()):
+    out = []
+    for c in cols:
+        spec = {"name": c, "id": c}
+        if c in pct:
+            spec.update(type="numeric", format=_PCT)
+        elif c in num:
+            spec.update(type="numeric", format=dash_table.Format.Format(precision=3,
+                        scheme=dash_table.Format.Scheme.fixed))
+        out.append(spec)
+    return out
+
+
+def _verdict_styles():
+    return [{"if": {"filter_query": "{survives_95} = true"}, "backgroundColor": "#e6f4ea", "fontWeight": "bold"},
+            {"if": {"filter_query": "{stale} = true"}, "color": "#b00"}]
+
+
+def overview_panel(universes=None) -> list:
+    df = analysis.run_overview(universes)
+    if df.empty:
+        return [html.P("No validation tables on disk yet — run the pipeline first.")]
+    return [
+        html.P("The composite's verdict for every run that has a validation table. "
+               "Red rows are stale (validation older than the backtest). Returns are "
+               "in each market's own currency, so levels are not comparable across rows; "
+               "the verdicts are.", style={"marginTop": "1em"}),
+        dash_table.DataTable(
+            data=df.to_dict("records"), sort_action="native", export_format="csv",
+            columns=_pct_cols(df.columns, pct=("ann_return",), num=("nw_tstat", "dsr")),
+            style_cell=_MONO, style_table={"overflowX": "auto"},
+            style_data_conditional=_verdict_styles()),
+        html.P("India is absent by design: it is screener-only and produces no validation table.",
+               style={"color": "#666", "fontSize": 13}),
+    ]
+
+
+def _month_options(uni: Universe):
+    data = data_for(uni)
+    if data is None or data[1] is None or "spread" not in data[1]:
+        return [], None
+    dates = data[1]["spread"].dropna().index
+    opts = [{"label": f"{d:%Y-%m}", "value": f"{d:%Y-%m-%d}"} for d in dates[::-1]]
+    return opts, (opts[0]["value"] if opts else None)
+
+
+def fig_month_spread(dec: pd.DataFrame, selected=None) -> go.Figure:
+    s = dec["spread"].dropna()
+    sel = pd.Timestamp(selected) if selected else None
+    colors = ["#d62728" if sel is not None and d == sel else ("#2c7fb8" if v >= 0 else "#999")
+              for d, v in s.items()]
+    fig = go.Figure(go.Bar(x=s.index, y=s.values, marker_color=colors,
+                           hovertemplate="%{x|%Y-%m}: %{y:.1%}<extra></extra>"))
+    fig.update_layout(title="Monthly top-minus-bottom spread — click a bar to inspect that month",
+                      yaxis_tickformat=".0%", height=300, margin=dict(t=50, b=30))
+    return fig
+
+
+def month_panel(options=(), value=None) -> list:
+    return [
+        dcc.Graph(id="month-graph"),
+        html.Div([html.Label("Month: "),
+                  dcc.Dropdown(id="month-date", options=list(options), value=value,
+                               clearable=False, style={"width": "160px"})],
+                 style={"display": "flex", "alignItems": "center", "gap": "0.5em"}),
+        html.Div(id="month-summary", style={"margin": "0.8em 0"}),
+        dash_table.DataTable(
+            id="month-table", page_size=20, sort_action="native", filter_action="native",
+            export_format="csv", style_cell=_MONO, style_table={"overflowX": "auto"},
+            columns=_pct_cols(["ticker", "sector", "bucket", "fwd_ret_1m", "contribution"],
+                              pct=("fwd_ret_1m", "contribution")),
+            style_data_conditional=[{"if": {"filter_query": "{contribution} > 0.02 || {contribution} < -0.02"},
+                                     "backgroundColor": "#fff3cd"}]),
+        html.P("contribution = the name's next-month return ÷ its bucket size, + for the top bucket "
+               "and − for the bottom, so the column sums to the month's spread. Highlighted names "
+               "moved the spread by more than 2 points on their own.",
+               style={"color": "#666", "fontSize": 13}),
+    ]
+
+
+def robustness_panel() -> list:
+    num = {"type": "number", "debounce": True, "style": {"width": "5em"}}
+    return [
+        html.P("Re-scores the composite's top-minus-bottom spread under one change at a time, "
+               "with the same Newey-West and Deflated Sharpe code as the validation table.",
+               style={"marginTop": "1em"}),
+        html.Div(style={"display": "flex", "gap": "1.5em", "flexWrap": "wrap", "alignItems": "center"}, children=[
+            html.Label(["Winsorize at (pct) ", dcc.Input(id="rob-winsor", value=1, min=0, max=10, step=0.5, **num)]),
+            html.Label(["Drop largest months ", dcc.Input(id="rob-top", value=2, min=0, max=24, step=1, **num)]),
+            html.Label(["Drop smallest months ", dcc.Input(id="rob-bottom", value=0, min=0, max=24, step=1, **num)]),
+        ]),
+        html.Label(["Exclude tickers from the top/bottom buckets (comma-separated) ",
+                    dcc.Input(id="rob-exclude", type="text", debounce=True, placeholder="e.g. GME, SBET",
+                              style={"width": "260px"})], style={"display": "block", "margin": "0.6em 0"}),
+        dash_table.DataTable(
+            id="rob-table", style_cell=_MONO, style_table={"overflowX": "auto"}, export_format="csv",
+            columns=_pct_cols(["scenario", "months", "ann_return", "nw_tstat", "dsr", "survives_95"],
+                              pct=("ann_return",), num=("nw_tstat", "dsr")),
+            style_data_conditional=_verdict_styles()),
+        dcc.Graph(id="rob-graph"),
+        html.Div(style={**_BOX, "fontSize": 13}, children=[
+            html.B("Read these as diagnostics, not new tests. "),
+            "Each perturbation tried here is another look at the same data, and the DSR's "
+            "N_trials = 4 does not count them. A verdict that flips under a small, reasonable "
+            "change is fragile; a perturbation chosen after seeing which way it flips the "
+            "verdict is the selection error the DSR exists to prevent.",
+        ]),
+    ]
+
+
 def build_app(universe="sp500") -> Dash:
     uni0 = get_universe(universe) if isinstance(universe, str) else universe
     # Base (uncorrected) universe per name. A Universe object passed in
@@ -419,6 +551,9 @@ def build_app(universe="sp500") -> Dash:
                 tab("F-Score scatter", "scatter", html.Div(views["scatter"], id="view-scatter")),
                 tab("Rolling spread", "rolling", html.Div(views["rolling"], id="view-rolling")),
                 tab("Validation", "validation", html.Div(views["validation"], id="view-validation")),
+                tab("Month explorer", "month", month_panel(*_month_options(uni0))),
+                tab("Robustness", "robust", robustness_panel()),
+                tab("All runs", "overview", html.Div(overview_panel(bases), id="view-overview")),
                 tab("Run pipeline", "pipeline", _pipeline_panel(uni0)),
             ]),
         ],
@@ -429,21 +564,88 @@ def build_app(universe="sp500") -> Dash:
         Output("data-status", "children"), Output("survivorship", "options"),
         *[Output(f"view-{k}", "children") for k in DATA_TABS],
         Output("company", "options"), Output("company", "value"),
+        Output("view-overview", "children"),
+        Output("month-date", "options"), Output("month-date", "value"),
         Input("universe", "value"), Input("survivorship", "value"),
         Input("reload", "n_clicks"), Input("data-version", "data"),
-        State("company", "value"),
+        State("company", "value"), State("month-date", "value"),
         prevent_initial_call=True,
     )
-    def _render(name, surv, _reload, _version, current):
+    def _render(name, surv, _reload, _version, current, current_month):
         uni = resolve(name, surv)
         v = render_views(uni)
         opts, first_ticker = _company_options(uni)
         keep = current if any(o["value"] == current for o in opts) else first_ticker
+        mopts, mfirst = _month_options(uni)
+        mkeep = current_month if any(o["value"] == current_month for o in mopts) else mfirst
         return (f"Composite Fundamental Screener — {uni.name} ({uni.currency})",
                 _subtitle(uni), artifact_status(uni),
                 [{"label": " survivorship-corrected", "value": "on",
                   "disabled": not survivorship_supported(name)}],
-                *[v[k] for k in DATA_TABS], opts, keep)
+                *[v[k] for k in DATA_TABS], opts, keep,
+                overview_panel(bases), mopts, mkeep)
+
+    @app.callback(Output("month-graph", "figure"), Output("month-summary", "children"),
+                  Output("month-table", "data"),
+                  Input("month-date", "value"), Input("universe", "value"),
+                  Input("survivorship", "value"), Input("data-version", "data"))
+    def _month(date, name, surv, _version):
+        uni = resolve(name, surv)
+        data = data_for(uni)
+        if data is None or data[1] is None or "spread" not in data[1] or not date:
+            return (go.Figure(layout=dict(title="No bucket returns for this universe", height=300)),
+                    "Run the backtest for this universe first.", [])
+        panel, dec = data[0], data[1]
+        m = analysis.month_buckets(panel, date, uni.n_buckets)
+        b = m["buckets"]
+
+        def line(label):
+            x = b.get(label)
+            if not x:
+                return f"{label}: empty"
+            return (f"{x['bucket']}: {x['names']} names, mean {x['mean']:+.1%}, "
+                    f"median {x['median']:+.1%}")
+
+        summary = [html.B(f"{pd.Timestamp(date):%B %Y} — spread {m['spread']:+.1%}. "),
+                   line("top"), html.Br(), line("bottom")]
+        if not uni.backtestable:
+            summary += [html.Br(), html.I("Descriptive only — this universe is not backtestable.")]
+        return fig_month_spread(dec, date), summary, m["contributors"].to_dict("records")
+
+    @app.callback(Output("month-date", "value", allow_duplicate=True),
+                  Input("month-graph", "clickData"), prevent_initial_call=True)
+    def _month_click(click):
+        if not click or not click.get("points"):
+            return no_update
+        return f"{pd.Timestamp(click['points'][0]['x']):%Y-%m-%d}"
+
+    @app.callback(Output("rob-table", "data"), Output("rob-graph", "figure"),
+                  Input("rob-winsor", "value"), Input("rob-top", "value"),
+                  Input("rob-bottom", "value"), Input("rob-exclude", "value"),
+                  Input("universe", "value"), Input("survivorship", "value"),
+                  Input("data-version", "data"))
+    def _robust(winsor, top, bottom, exclude, name, surv, _version):
+        uni = resolve(name, surv)
+        data = data_for(uni)
+        if data is None or data[1] is None or "spread" not in data[1]:
+            return [], go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
+        panel, dec = data[0], data[1]
+        tickers = [t for t in (exclude or "").split(",") if t.strip()]
+        excl = analysis.spread_excluding(panel, tickers, uni.n_buckets) if tickers else None
+        label = "Excluding " + ", ".join(t.strip().upper() for t in tickers) if tickers else ""
+        table = analysis.robustness_table(dec["spread"], float(winsor or 0), int(top or 0),
+                                          int(bottom or 0), excl, label)
+        fig = go.Figure()
+        base = dec["spread"].dropna()
+        fig.add_trace(go.Scatter(x=base.index, y=(1 + base).cumprod() - 1, name="Baseline",
+                                 line=dict(color="black", width=2)))
+        if excl is not None and len(excl):
+            fig.add_trace(go.Scatter(x=excl.index, y=(1 + excl.dropna()).cumprod() - 1, name=label))
+        fig.update_layout(title="Cumulative composite spread", yaxis_tickformat=".0%", height=380,
+                          legend=dict(orientation="h", y=-0.2))
+        if not uni.backtestable:
+            fig.update_layout(title="Cumulative composite spread [descriptive only — not a test]")
+        return table.to_dict("records"), fig
 
     @app.callback(Output("company-graph", "figure"),
                   Input("company", "value"), Input("universe", "value"),

@@ -699,8 +699,20 @@ Everything the CLI does is reachable from the page:
   a panel that is no longer on disk (e.g. after a 50-ticker test run).
 - **Company detail** — click any screener row (or pick a ticker) for its
   F / Z / O / composite history and decile placement each month.
-- **CSV export** on the screener and validation tables, and a data-status
-  line showing when each artifact was last written.
+- **Month explorer** — click any month's bar to see who was in the top and
+  bottom buckets and how much each name contributed to that month's spread
+  (contributions sum to the spread). Russell 3000, December 2020: GME alone
+  is 15.9 of the 24.3 points.
+- **Robustness** — re-scores the composite spread with winsorizing,
+  dropping the N largest/smallest months, or excluding named tickers, using
+  the same Newey-West/DSR code as the validation table (and reproducing
+  FINDINGS' hand-run Russell 3000 checks exactly). Labeled as diagnostics:
+  the DSR's N_trials = 4 does not count the perturbations you try.
+- **All runs** — every market and survivorship mode's composite verdict in
+  one table, with stale validations flagged.
+- **CSV export** on every table, and a data-status line showing when each
+  artifact was last written. The F-Score scatter samples 20,000 points for
+  display on large universes; its OLS line is still fitted on all of them.
 
 `python -m dashboard.app --universe kospi --survivorship` starts on a
 specific view; `--host 0.0.0.0` serves it on your network.
