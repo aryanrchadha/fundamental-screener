@@ -52,9 +52,10 @@ names (202/743) crashed more than 70% at some point in-sample and
 recovered — exactly the "distressed survivor" population an uncorrected,
 backward-applied constituent list selects for — and removing just those
 202 names drops DSR from 0.988 to 0.9145, below the bar, on its own. The
-result is additionally driven by two single-name, single-month events
-(GameStop's +1,625% short-squeeze month, a crypto-treasury pivot's +2,267%
-month — both members of that same 202-name recovery group), and is a
+result additionally hinges on two months — GameStop's +1,625%
+short-squeeze month and a crypto-treasury pivot's +2,267% month, both
+names members of that same 202-name recovery group, though the rest of
+the top bucket rallied in both months too — and is a
 purely post-2019 phenomenon (−2.8% cumulative 2012–2018, +383.5%
 2019–2025). See the full Russell 3000 section below for the complete
 mechanism and the audit methodology. Counted as a survivor in the tally
@@ -404,6 +405,21 @@ true.
    DSR to 0.932 — below the 0.95 bar.** A result whose survival flips
    between "cap the outlier" and "exclude the outlier" is not robust; it
    is sitting exactly on the edge the correction is supposed to catch.
+
+   *Refinement (2026-10-05, from the dashboard's Month explorer and
+   Robustness tabs):* the fragility belongs to the two **months**, not
+   the two **names**. Removing just `GME` and `SBET` from the buckets —
+   keeping every other name in those months — leaves the composite at
+   +10.5%/yr, t 2.30, **DSR 0.959: still a nominal survivor.** The reason
+   is that both months were broad junk rallies, not one-stock events.
+   Without GME, December 2020's top bucket still beat the bottom by 8.3
+   points (GME alone added 15.9 of the month's 24.3); without SBET, April
+   2025's still beat it by 6.8 (SBET added 17.3 of 24.1), with the top
+   bucket's *median* name up 8.7% that month. So the verdict rests on
+   two months in which low-quality stocks rallied as a group. That is
+   still not robust — excluding those two months fails the bar — but it
+   is a regime story, not an outlier-name story, and an earlier version
+   of this point overstated the role of the two names.
 4. **The effect is a post-2019 phenomenon, not a persistent premium.**
    Cumulative composite spread: −2.8% across the first half (2012–2018,
    essentially flat for seven years), **+383.5%** across the second
@@ -1030,8 +1046,8 @@ independent checks (a direct audit confirming 27% of that bucket's unique
 names crashed >70% and recovered, with removing just those names alone
 dropping DSR below the bar; no survivorship correction on a universe where
 that matters far more than at 503 stable large-caps; a result that flips
-from surviving to failing depending on whether two single-name mania
-months are capped or dropped entirely; a cumulative return that is flat
+from surviving to failing depending on whether two junk-rally months
+are capped or dropped entirely; a cumulative return that is flat
 for seven years and then entirely a 2019–2025 phenomenon) point to this
 being a survivorship-bias-and-outlier-concentration artifact rather than a
 real reversal of the distress-anomaly finding. Full mechanism and audit

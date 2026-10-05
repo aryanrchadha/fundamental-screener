@@ -242,14 +242,19 @@ this being an artifact rather than a real reversal:
   went bankrupt between 2012 and today and keeps only the ones that
   survived, many via a distress-recovery rally — the mechanism the audit
   above confirms directly rather than merely predicts.
-- **Nearly the entire return is concentrated in specific single-name,
-  single-month events.** December 2020's spread is dominated by `GME` —
-  GameStop's short-squeeze month, **+1,625% in one month**, equal-weighted
-  into a 102-name bucket; April 2025 by `SBET` (+2,267%, a crypto-treasury
-  pivot). Winsorizing the spread series at the 1st/99th percentile still
-  survives (DSR 0.993), but **dropping just those two months entirely
-  drops DSR to 0.932 — below the 0.95 bar.** A result whose survival flips
-  depending on whether two months are capped or removed is not robust.
+- **The verdict hinges on two months.** December 2020's spread is
+  dominated by `GME` — GameStop's short-squeeze month, **+1,625% in one
+  month**, equal-weighted into a 102-name bucket; April 2025 by `SBET`
+  (+2,267%, a crypto-treasury pivot). Winsorizing the spread series at the
+  1st/99th percentile still survives (DSR 0.993), but **dropping just
+  those two months entirely drops DSR to 0.932 — below the 0.95 bar.** A
+  result whose survival flips depending on whether two months are capped
+  or removed is not robust. The months matter more than the names:
+  removing only GME and SBET leaves DSR at 0.959 (+10.5%/yr), because the
+  rest of the top bucket rallied too (+8.3 and +6.8 points of spread
+  without them) — both were broad junk-rally months. An earlier version
+  of this bullet said "nearly the entire return" came from these events;
+  the two names account for about 2.7 of the 13.2 points.
 - **The effect is entirely a post-2019 phenomenon.** Cumulative spread:
   −2.8% in the first half (2012–2018), **+383.5%** in the second
   (2019–2025) — a genuine cross-sectional factor premium does not usually
