@@ -120,3 +120,45 @@ def test_threshold_screens_use_published_cutoffs_and_fail_missing_scores():
     assert list(apply_screens(x, ["z_grey"])["ticker"]) == ["B"]
     assert list(apply_screens(x, ["o_risk"])["ticker"]) == ["C"]                # O > 0 strictly
     assert len(apply_screens(x, [])) == 4
+
+
+def _book(members_by_month):
+    rows = []
+    for d, (top, bottom) in members_by_month.items():
+        rows += [dict(as_of_date=pd.Timestamp(d), ticker=t, sector="X", decile=2.0, fwd_ret_1m=0.0) for t in top]
+        rows += [dict(as_of_date=pd.Timestamp(d), ticker=t, sector="X", decile=1.0, fwd_ret_1m=0.0) for t in bottom]
+    return pd.DataFrame(rows)
+
+
+def test_turnover_is_the_fraction_of_each_leg_replaced():
+    p = _book({"2020-01-31": (["A", "B", "C", "D"], ["W", "X"]),
+               "2020-02-29": (["A", "B", "C", "E"], ["W", "X"]),     # top swaps 1 of 4
+               "2020-03-31": (["F", "G", "H", "I"], ["Y", "Z"])})    # both legs fully replaced
+    t = analysis.bucket_turnover(p, 2)
+    assert np.isnan(t["top"].iloc[0])
+    assert t["top"].tolist()[1:] == pytest.approx([0.25, 1.0])
+    assert t["bottom"].tolist()[1:] == pytest.approx([0.0, 1.0])
+
+
+def test_costs_charge_both_legs_round_trip():
+    idx = pd.to_datetime(["2020-01-31", "2020-02-29"])
+    spread = pd.Series([0.01, 0.01], index=idx)
+    turn = pd.DataFrame({"top": [np.nan, 0.25], "bottom": [np.nan, 0.5]}, index=idx)
+    net = analysis.net_of_costs(spread, turn, 100)                   # 1% one-way
+    # month 2: traded 2*(0.25+0.5) = 1.5 of capital -> 1.5% drag
+    assert net.tolist() == pytest.approx([0.01, 0.01 - 0.015])
+    assert analysis.net_of_costs(spread, turn, 0).equals(spread.rename("spread"))
+
+
+def test_breakeven_and_dsr_failure_costs():
+    rng = np.random.default_rng(1)
+    idx = pd.date_range("2010-01-31", periods=120, freq="ME")
+    spread = pd.Series(0.02 + rng.normal(0, 0.01, 120), index=idx)
+    turn = pd.DataFrame({"top": 0.1, "bottom": 0.1}, index=idx)
+    be = analysis.breakeven_cost_bps(spread, turn)
+    assert analysis.net_of_costs(spread, turn, be).mean() == pytest.approx(0, abs=1e-12)
+    fail = analysis.dsr_fail_cost_bps(spread, turn)
+    assert 0 < fail < be
+    assert analysis._stats(analysis.net_of_costs(spread, turn, fail))["survives_95"] is False
+    assert analysis._stats(analysis.net_of_costs(spread, turn, fail - 1))["survives_95"] is True
+    assert np.isnan(analysis.breakeven_cost_bps(-spread, turn))

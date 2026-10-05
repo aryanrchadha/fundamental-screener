@@ -720,6 +720,15 @@ Everything the CLI does is reachable from the page:
   sectors. A sector-attribution chart shows each sector's share of the
   spread (contributions sum to it). Labeled as diagnostics:
   the DSR's N_trials = 4 does not count the perturbations you try.
+- **Costs** — one-way turnover of the top and bottom buckets each month,
+  the spread net of a trading cost you set, and two break-evens: the cost
+  at which the mean spread reaches zero and the cost at which the DSR drops
+  to 0.95. The Russell 3000 "survivor" stops surviving at **36.6 bps
+  one-way** — inside the usual 25–60 bps range for small caps — and its
+  mean spread hits zero at ~226 bps.
+- **Watchlist** — pin tickers (saved in your browser, per universe) and
+  follow their decile or any score side by side, with this month's decile
+  next to the one 12 months earlier.
 - **All runs** — every market and survivorship mode's composite verdict in
   one table, with stale validations flagged, plus a chart overlaying the
   cumulative composite spread of any runs you tick (local currency, so

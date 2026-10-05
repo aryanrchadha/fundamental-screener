@@ -133,3 +133,18 @@ def test_app_shows_a_run_prompt_when_a_universe_has_no_panel(tmp_path):
     rendered = str(appmod.build_app(uni).layout)
     assert "No scores panel for sp500" in rendered
     assert "Run pipeline" in rendered
+
+
+def test_watchlist_rows_report_latest_and_year_ago_decile():
+    from dashboard.app import fig_watchlist, watchlist_rows
+
+    dates = pd.date_range("2024-01-31", periods=14, freq="ME")
+    p = pd.DataFrame([dict(as_of_date=d, ticker=t, sector="X", f_score=5.0, z_score=2.0, o_score=-5.0,
+                           composite_score=0.1, decile=float(1 + i // 7) if t == "A" else 3.0)
+                      for i, d in enumerate(dates) for t in ("A", "B")])
+    rows = {r["ticker"]: r for r in watchlist_rows(p, ["A", "B"])}
+    assert rows["A"]["decile"] == 2.0 and rows["A"]["decile_12m_ago"] == 1.0
+    assert rows["A"]["as_of_date"] == "2025-02-28"
+    assert watchlist_rows(p, []) == []
+    fig = fig_watchlist(p, ["A", "B"], "decile", 5)
+    assert len(fig.data) == 2 and tuple(fig.layout.yaxis.range) == (0.5, 5.5)

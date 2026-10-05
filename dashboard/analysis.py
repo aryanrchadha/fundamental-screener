@@ -218,3 +218,78 @@ def cumulative_spreads(runs: list[dict]) -> dict[str, pd.Series]:
             s = d["spread"].dropna()
             out[r["label"]] = (1 + s).cumprod() - 1
     return out
+
+
+# ---------------------------------------------------------------------------
+# Turnover and trading costs
+# ---------------------------------------------------------------------------
+
+def bucket_turnover(panel: pd.DataFrame, n_buckets: int) -> pd.DataFrame:
+    """One-way turnover of the top and bottom buckets at each rebalance.
+
+    Each leg is equal-weighted over the names that enter its return (those
+    with a forward return), as in bucket_return_series. One-way turnover is
+    half the summed absolute weight change versus the previous rebalance —
+    the fraction of the leg sold (= the fraction bought). Weights are
+    compared target-to-target, ignoring intra-month drift, which slightly
+    understates true turnover. The first month has no prior book: NaN.
+    """
+    x = panel[panel["decile"].isin([1, n_buckets]) & panel["fwd_ret_1m"].notna()]
+    out = {}
+    for label, b in (("top", n_buckets), ("bottom", 1)):
+        leg = x[x["decile"] == b]
+        w = leg.groupby("as_of_date")["ticker"].apply(lambda t: pd.Series(1.0 / len(t), index=t.values))
+        w = w.unstack(fill_value=0.0).sort_index()
+        out[label] = 0.5 * w.diff().abs().sum(axis=1)
+        out[label].iloc[0] = np.nan
+    return pd.DataFrame(out)
+
+
+def net_of_costs(spread: pd.Series, turnover: pd.DataFrame, cost_bps: float) -> pd.Series:
+    """Spread after paying `cost_bps` one way on every trade.
+
+    Rebalancing a leg with one-way turnover tau trades 2*tau of its value
+    (sell tau, buy tau); a long-short spread pays that on both legs. The
+    cost is charged against the return earned over the following month,
+    i.e. aligned on the same rebalance date as the spread.
+    """
+    traded = 2 * (turnover["top"] + turnover["bottom"])
+    drag = (cost_bps / 1e4) * traded.reindex(spread.index).fillna(0.0)
+    return (spread - drag).rename("spread")
+
+
+def breakeven_cost_bps(spread: pd.Series, turnover: pd.DataFrame) -> float:
+    """One-way cost (bps) at which the mean net spread reaches zero; NaN when
+    the gross spread is already non-positive (no cost level to break even at)."""
+    s = spread.dropna()
+    traded = 2 * (turnover["top"] + turnover["bottom"]).reindex(s.index).fillna(0.0)
+    if s.mean() <= 0 or traded.mean() <= 0:
+        return np.nan
+    return float(s.mean() / traded.mean() * 1e4)
+
+
+def cost_table(spread: pd.Series, turnover: pd.DataFrame, costs_bps=(0, 10, 25, 50)) -> pd.DataFrame:
+    rows = []
+    for c in costs_bps:
+        rows.append({"scenario": f"{c:g} bps one-way", **_stats(net_of_costs(spread, turnover, c))})
+    return pd.DataFrame(rows)
+
+
+def dsr_fail_cost_bps(spread: pd.Series, turnover: pd.DataFrame, hi: float = 1000.0,
+                      tol: float = 0.5) -> float:
+    """Smallest one-way cost (bps) at which the net spread's DSR drops to
+    0.95 or below. NaN if it already fails gross; `hi` if it survives even
+    there. Net DSR falls monotonically as cost rises, so bisection is exact
+    to `tol`."""
+    def survives(c):
+        return _stats(net_of_costs(spread, turnover, c))["survives_95"]
+
+    if not survives(0.0):
+        return np.nan
+    if survives(hi):
+        return hi
+    lo = 0.0
+    while hi - lo > tol:
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if survives(mid) else (lo, mid)
+    return round(hi, 1)

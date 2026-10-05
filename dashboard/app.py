@@ -230,6 +230,11 @@ def _cached_data(uni: Universe, mtimes: tuple):
     return load_data(uni)
 
 
+@lru_cache(maxsize=8)
+def _turnover_cached(uni: Universe, mtimes: tuple) -> pd.DataFrame:
+    return analysis.bucket_turnover(data_for(uni)[0], uni.n_buckets)
+
+
 def data_for(uni: Universe):
     """load_data, cached until any of the universe's artifacts change.
     Returns None when the scores panel has not been produced yet."""
@@ -573,6 +578,88 @@ def screener_rows(uni: Universe, screens) -> tuple[list, str]:
     return shown.to_dict("records"), caption
 
 
+def costs_panel() -> list:
+    return [
+        html.P("What trading the composite's long-short spread would have cost. Each rebalance "
+               "replaces part of the top and bottom buckets; every name replaced is sold and "
+               "bought, on both legs, at the one-way cost below.", style={"marginTop": "1em"}),
+        html.Label(["One-way cost (bps) ",
+                    dcc.Input(id="cost-bps", type="number", value=30, min=0, max=500, step=1,
+                              debounce=True, style={"width": "5em"})]),
+        html.Div(id="cost-summary", style={"margin": "0.8em 0"}),
+        dash_table.DataTable(
+            id="cost-table", style_cell=_MONO, style_table={"overflowX": "auto"}, export_format="csv",
+            columns=_pct_cols(["scenario", "months", "ann_return", "nw_tstat", "dsr", "survives_95"],
+                              pct=("ann_return",), num=("nw_tstat", "dsr")),
+            style_data_conditional=_verdict_styles()),
+        dcc.Graph(id="cost-graph"),
+        dcc.Graph(id="turnover-graph"),
+        html.P("Turnover compares target equal weights rebalance to rebalance, ignoring "
+               "intra-month drift, so it slightly understates true trading. Rough one-way "
+               "costs: large caps ~5–15 bps, small caps ~25–60, micro caps 100+.",
+               style={"color": "#666", "fontSize": 13}),
+    ]
+
+
+WATCH_METRICS = {"decile": "Decile (bucket)", "composite_score": "Composite score",
+                 "f_score": "Piotroski F", "z_score": "Altman Z", "o_score": "Ohlson O"}
+
+
+def watchlist_panel() -> list:
+    return [
+        html.P("Pin tickers to follow them side by side. Pins are saved in this browser, "
+               "separately for each universe.", style={"marginTop": "1em"}),
+        html.Div(style={"display": "flex", "gap": "1em", "flexWrap": "wrap", "alignItems": "center"}, children=[
+            dcc.Dropdown(id="watch-tickers", multi=True, placeholder="Add tickers…",
+                         style={"minWidth": "420px", "flex": "1"}),
+            dcc.Dropdown(id="watch-metric", value="decile", clearable=False, style={"width": "200px"},
+                         options=[{"label": v, "value": k} for k, v in WATCH_METRICS.items()]),
+        ]),
+        dcc.Store(id="watch-store", storage_type="local"),
+        dcc.Graph(id="watch-graph"),
+        dash_table.DataTable(
+            id="watch-table", sort_action="native", export_format="csv", style_cell=_MONO,
+            style_table={"overflowX": "auto"},
+            columns=_pct_cols(["ticker", "sector", "as_of_date", "f_score", "z_score", "o_score",
+                               "composite_score", "decile", "decile_12m_ago"])),
+    ]
+
+
+def fig_watchlist(panel: pd.DataFrame, tickers, metric: str, n_buckets: int) -> go.Figure:
+    fig = go.Figure()
+    for t in tickers or []:
+        df = panel[panel["ticker"] == t].sort_values("as_of_date")
+        fig.add_trace(go.Scatter(x=df["as_of_date"], y=df[metric], name=t, mode="lines",
+                                 line=dict(shape="hv")))
+    fig.update_layout(title=f"{WATCH_METRICS[metric]} over time", height=450,
+                      legend=dict(orientation="h", y=-0.2))
+    if metric == "decile":
+        fig.update_yaxes(range=[0.5, n_buckets + 0.5], dtick=1,
+                         title=f"1 = worst … {n_buckets} = best composite")
+    if not tickers:
+        fig.update_layout(title="Pick tickers above to plot them")
+    return fig
+
+
+def watchlist_rows(panel: pd.DataFrame, tickers) -> list:
+    if not tickers:
+        return []
+    last = panel["as_of_date"].max()
+    x = panel[panel["ticker"].isin(tickers)].sort_values("as_of_date")
+    rows = []
+    for t, df in x.groupby("ticker"):
+        cur = df.iloc[-1]
+        prior = df[df["as_of_date"] <= last - pd.DateOffset(months=12)]
+        rows.append({
+            "ticker": t, "sector": cur["sector"], "as_of_date": f"{cur['as_of_date']:%Y-%m-%d}",
+            **{c: (None if pd.isna(cur[c]) else round(float(cur[c]), 3))
+               for c in ("f_score", "z_score", "o_score", "composite_score", "decile")},
+            "decile_12m_ago": (None if prior.empty or pd.isna(prior.iloc[-1]["decile"])
+                               else float(prior.iloc[-1]["decile"])),
+        })
+    return rows
+
+
 def build_app(universe="sp500") -> Dash:
     uni0 = get_universe(universe) if isinstance(universe, str) else universe
     # Base (uncorrected) universe per name. A Universe object passed in
@@ -642,6 +729,8 @@ def build_app(universe="sp500") -> Dash:
                 tab("Validation", "validation", html.Div(views["validation"], id="view-validation")),
                 tab("Month explorer", "month", month_panel(*_month_options(uni0))),
                 tab("Robustness", "robust", robustness_panel()),
+                tab("Watchlist", "watch", watchlist_panel()),
+                tab("Costs", "costs", costs_panel()),
                 tab("All runs", "overview", [html.Div(overview_panel(bases), id="view-overview"),
                                              *compare_panel(bases)]),
                 tab("Run pipeline", "pipeline", _pipeline_panel(uni0)),
@@ -743,6 +832,90 @@ def build_app(universe="sp500") -> Dash:
             fig.update_layout(title="Cumulative composite spread [descriptive only — not a test]")
         return (table.to_dict("records"), fig, fig_sector_attribution(panel, uni.n_buckets),
                 [{"label": x, "value": x} for x in all_sectors])
+
+    @app.callback(Output("cost-summary", "children"), Output("cost-table", "data"),
+                  Output("cost-graph", "figure"), Output("turnover-graph", "figure"),
+                  Input("cost-bps", "value"), Input("universe", "value"),
+                  Input("survivorship", "value"), Input("data-version", "data"))
+    def _costs(bps, name, surv, _version):
+        uni = resolve(name, surv)
+        data = data_for(uni)
+        empty = go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
+        if data is None or data[1] is None or "spread" not in data[1]:
+            return "Run the backtest for this universe first.", [], empty, empty
+        panel, dec = data[0], data[1]
+        bps = float(bps or 0)
+        turn = _turnover_cached(uni, _artifact_mtimes(uni))
+        spread = dec["spread"].dropna()
+        levels = sorted({0.0, 10.0, 25.0, 50.0, bps})
+        table = analysis.cost_table(spread, turn, levels)
+        be = analysis.breakeven_cost_bps(spread, turn)
+        fail = analysis.dsr_fail_cost_bps(spread, turn)
+        avg = turn.mean()
+        summary = [
+            html.B(f"Average one-way turnover per rebalance: top {avg['top']:.1%}, "
+                   f"bottom {avg['bottom']:.1%}. "),
+            html.Br(),
+            ("Gross spread is already non-positive, so costs only deepen the loss."
+             if np.isnan(be) else f"Mean net spread reaches zero at {be:.0f} bps one-way. "),
+            ("" if np.isnan(fail) else
+             f"Deflated Sharpe drops to 0.95 or below at {fail:.1f} bps one-way."
+             if fail < 1000 else "Deflated Sharpe survives even at 1,000 bps one-way."),
+        ]
+        if not uni.backtestable:
+            summary += [html.Br(), html.I("Descriptive only — this universe is not backtestable.")]
+        net = analysis.net_of_costs(spread, turn, bps)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=spread.index, y=(1 + spread).cumprod() - 1, name="Gross",
+                                 line=dict(color="black", width=2)))
+        fig.add_trace(go.Scatter(x=net.index, y=(1 + net).cumprod() - 1, name=f"Net of {bps:g} bps"))
+        fig.update_layout(title="Cumulative composite spread, gross vs net", yaxis_tickformat=".0%",
+                          height=380, legend=dict(orientation="h", y=-0.2))
+        tfig = go.Figure()
+        for leg in ("top", "bottom"):
+            tfig.add_trace(go.Scatter(x=turn.index, y=turn[leg], name=f"{leg} bucket", mode="lines"))
+        tfig.update_layout(title="One-way turnover per rebalance", yaxis_tickformat=".0%", height=320,
+                           legend=dict(orientation="h", y=-0.25))
+        return summary, table.to_dict("records"), fig, tfig
+
+    # The browser store loads its saved pins only after the initial
+    # callbacks have run, so `modified_timestamp` is an Input: the picker is
+    # filled again once the pins arrive. Until then (store is None) neither
+    # callback touches the pins — otherwise the empty pre-load state would
+    # be written back over them, wiping the watchlist on every reload.
+    @app.callback(Output("watch-tickers", "options"), Output("watch-tickers", "value"),
+                  Input("universe", "value"), Input("data-version", "data"),
+                  Input("watch-store", "modified_timestamp"), State("watch-store", "data"))
+    def _watch_options(name, _version, _ts, store):
+        data = data_for(bases[name])
+        if data is None:
+            return [], []
+        tickers = sorted(data[0]["ticker"].dropna().unique())
+        opts = [{"label": t, "value": t} for t in tickers]
+        if store is None:
+            return opts, no_update
+        valid = set(tickers)
+        return opts, [t for t in store.get(name, []) if t in valid]
+
+    @app.callback(Output("watch-store", "data"),
+                  Input("watch-tickers", "value"), State("universe", "value"),
+                  State("watch-store", "data"), prevent_initial_call=True)
+    def _watch_save(tickers, name, store):
+        tickers = tickers or []
+        if (store or {}).get(name, []) == tickers:
+            return no_update                 # nothing changed; avoid a write/re-fill loop
+        return {**(store or {}), name: tickers}
+
+    @app.callback(Output("watch-graph", "figure"), Output("watch-table", "data"),
+                  Input("watch-tickers", "value"), Input("watch-metric", "value"),
+                  Input("universe", "value"), Input("survivorship", "value"),
+                  Input("data-version", "data"))
+    def _watch(tickers, metric, name, surv, _version):
+        uni = resolve(name, surv)
+        data = data_for(uni)
+        if data is None:
+            return go.Figure(layout=dict(title="No scores panel for this universe", height=300)), []
+        return fig_watchlist(data[0], tickers, metric, uni.n_buckets), watchlist_rows(data[0], tickers)
 
     @app.callback(Output("compare-graph", "figure"),
                   Input("compare-runs", "value"), Input("data-version", "data"))
