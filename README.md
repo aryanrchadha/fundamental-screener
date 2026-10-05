@@ -697,6 +697,11 @@ Everything the CLI does is reachable from the page:
 - **Stale-result banner** — if the validation table or rolling chart is
   older than the backtest output, the page says so: those numbers describe
   a panel that is no longer on disk (e.g. after a 50-ticker test run).
+- **Textbook screens** — tick the original papers' cutoffs (Piotroski
+  F ≥ 8 / ≤ 2, Altman 1968 safe > 2.99 / grey / distress < 1.81, Ohlson
+  P(default) above or below 50%, i.e. O > 0 / O < 0) and the screener keeps
+  names passing all of them. A name missing a score fails that screen. The
+  table also shows O's implied default probability.
 - **Company detail** — click any screener row (or pick a ticker) for its
   F / Z / O / composite history and decile placement each month.
 - **Month explorer** — click any month's bar to see who was in the top and
@@ -706,10 +711,14 @@ Everything the CLI does is reachable from the page:
 - **Robustness** — re-scores the composite spread with winsorizing,
   dropping the N largest/smallest months, or excluding named tickers, using
   the same Newey-West/DSR code as the validation table (and reproducing
-  FINDINGS' hand-run Russell 3000 checks exactly). Labeled as diagnostics:
+  FINDINGS' hand-run Russell 3000 checks exactly), or excluding whole
+  sectors. A sector-attribution chart shows each sector's share of the
+  spread (contributions sum to it). Labeled as diagnostics:
   the DSR's N_trials = 4 does not count the perturbations you try.
 - **All runs** — every market and survivorship mode's composite verdict in
-  one table, with stale validations flagged.
+  one table, with stale validations flagged, plus a chart overlaying the
+  cumulative composite spread of any runs you tick (local currency, so
+  compare shape and timing rather than levels).
 - **CSV export** on every table, and a data-status line showing when each
   artifact was last written. The F-Score scatter samples 20,000 points for
   display on large universes; its OLS line is still fitted on all of them.

@@ -52,8 +52,37 @@ def load_data(universe="sp500"):
 def latest_cross_section(panel: pd.DataFrame) -> pd.DataFrame:
     last = panel["as_of_date"].max()
     cols = ["ticker", "sector", "f_score", "z_score", "o_score", "composite_score", "decile"]
-    xsec = panel[panel["as_of_date"] == last][cols].dropna(subset=["composite_score"])
-    return xsec.round(3).sort_values("composite_score", ascending=False)
+    xsec = panel[panel["as_of_date"] == last][cols].dropna(subset=["composite_score"]).copy()
+    # Ohlson's O is a logit; the implied one-to-two-year default probability
+    # is the logistic of it. Shown because "O = -7.9" means little on sight.
+    xsec.insert(xsec.columns.get_loc("o_score") + 1, "o_default_prob",
+                1 / (1 + np.exp(-xsec["o_score"])))
+    return xsec.round({"f_score": 0, "z_score": 3, "o_score": 3, "o_default_prob": 7,
+                       "composite_score": 3}).sort_values("composite_score", ascending=False)
+
+
+# Textbook cutoffs from the original papers, applied to the raw scores.
+# Altman: the 1968 public-company model's zones (distress < 1.81, safe >
+# 2.99). Piotroski: his "high" portfolio is F = 8-9, "low" is 0-1.
+# Ohlson: O is a logit, so P(default) > 50% is O > 0.
+SCREENS = {
+    "f_high": ("Piotroski high (F ≥ 8)", lambda x: x["f_score"] >= 8),
+    "f_low": ("Piotroski low (F ≤ 2)", lambda x: x["f_score"] <= 2),
+    "z_safe": ("Altman safe zone (Z > 2.99)", lambda x: x["z_score"] > 2.99),
+    "z_grey": ("Altman grey zone (1.81–2.99)", lambda x: x["z_score"].between(1.81, 2.99)),
+    "z_distress": ("Altman distress zone (Z < 1.81)", lambda x: x["z_score"] < 1.81),
+    "o_safe": ("Ohlson P(default) < 50% (O < 0)", lambda x: x["o_score"] < 0),
+    "o_risk": ("Ohlson P(default) > 50% (O > 0)", lambda x: x["o_score"] > 0),
+}
+
+
+def apply_screens(xsec: pd.DataFrame, keys) -> pd.DataFrame:
+    """Rows passing every selected screen (AND). A name missing a score a
+    screen needs fails that screen rather than passing by default."""
+    mask = pd.Series(True, index=xsec.index)
+    for k in keys or []:
+        mask &= SCREENS[k][1](xsec).fillna(False).astype(bool)
+    return xsec[mask]
 
 
 def fig_sector_heatmap(panel: pd.DataFrame) -> go.Figure:
@@ -155,7 +184,7 @@ def fig_rolling(roll: pd.DataFrame, universe_name: str = "", backtestable: bool 
 def fig_company_history(panel: pd.DataFrame, ticker: str) -> go.Figure:
     """One company's score history: the three raw scores plus where the
     composite placed it each month. Raw scores, not sector z-scores, so the
-    numbers match the published thresholds (F 0-9, Z 1.8/3.0, O > 0.5)."""
+    numbers match the published thresholds (F 0-9, Z 1.81/2.99, O > 0 i.e. P(default) > 50%)."""
     df = panel[panel["ticker"] == ticker].sort_values("as_of_date")
     rows = [("f_score", "Piotroski F"), ("z_score", "Altman Z"),
             ("o_score", "Ohlson O"), ("composite_score", "Composite")]
@@ -291,18 +320,7 @@ def render_views(uni: Universe) -> dict:
         return {k: msg for k in DATA_TABS}
 
     panel, dec, summary, roll = data
-    xsec = latest_cross_section(panel)
     stale = stale_warning(uni)
-    table = dash_table.DataTable(
-        id="screener-table",
-        data=xsec.to_dict("records"),
-        columns=[{"name": c, "id": c} for c in xsec.columns],
-        filter_action="native", sort_action="native", page_size=25,
-        export_format="csv", export_headers="display",
-        style_table={"overflowX": "auto"},
-        style_cell={"fontFamily": "monospace", "fontSize": 13},
-        style_data_conditional=[{"if": {"state": "active"}, "backgroundColor": "#e8f0fe"}],
-    )
     if summary is not None:
         s = summary.round(3).reset_index()
         validation = [
@@ -323,13 +341,7 @@ def render_views(uni: Universe) -> dict:
         validation = [_unavailable(uni, "Validation summary")]
 
     return {
-        "screener": [
-            html.P(f"Latest cross-section ({panel['as_of_date'].max():%Y-%m-%d}), "
-                   f"{len(xsec)} names. Filter boxes accept e.g. >5 or contains Tech. "
-                   "Click a row to open that company's history; Export downloads the "
-                   "filtered table as CSV."),
-            table,
-        ],
+        "screener": [],                      # the table itself is static; see _screener
         "heatmap": [dcc.Graph(figure=fig_sector_heatmap(panel))],
         "buckets": [dcc.Graph(figure=fig_decile_cumret(dec, uni.n_buckets)) if dec is not None
                     else _unavailable(uni, "Bucket returns")],
@@ -426,6 +438,44 @@ def overview_panel(universes=None) -> list:
     ]
 
 
+def compare_panel(universes=None) -> list:
+    runs = analysis.available_runs(universes)
+    default = [r["key"] for r in runs if r["key"] in ("sp500|static", "sp500|corrected")]
+    return [
+        html.H4("Compare runs", style={"marginTop": "1.5em"}),
+        dcc.Checklist(id="compare-runs", value=default, inline=True,
+                      options=[{"label": f" {r['label']} ", "value": r["key"]} for r in runs],
+                      style={"fontSize": 13}),
+        dcc.Graph(id="compare-graph"),
+    ]
+
+
+def fig_compare(series: dict) -> go.Figure:
+    fig = go.Figure()
+    for label, cum in series.items():
+        fig.add_trace(go.Scatter(x=cum.index, y=cum.values, name=label))
+    fig.add_hline(y=0, line_dash="dot")
+    fig.update_layout(title="Cumulative composite spread by run (local currency — compare shape "
+                            "and timing, not levels)", yaxis_tickformat=".0%", height=450,
+                      legend=dict(orientation="h", y=-0.2))
+    return fig
+
+
+def fig_sector_attribution(panel: pd.DataFrame, n_buckets: int) -> go.Figure:
+    a = analysis.sector_attribution(panel, n_buckets)
+    fig = go.Figure(go.Bar(
+        x=a["ann_contribution"], y=a["sector"], orientation="h",
+        marker_color=["#2c7fb8" if v >= 0 else "#d62728" for v in a["ann_contribution"]],
+        customdata=a[["avg_top_names", "avg_bottom_names"]].values,
+        hovertemplate=("%{y}: %{x:+.2%}/yr<br>avg %{customdata[0]:.1f} names in top bucket, "
+                       "%{customdata[1]:.1f} in bottom<extra></extra>")))
+    total = a["ann_contribution"].sum()
+    fig.update_layout(title=f"Where the spread came from, by sector (sums to {total:+.1%}/yr, "
+                            "arithmetic)", xaxis_tickformat=".1%", height=420,
+                      margin=dict(l=180))
+    return fig
+
+
 def _month_options(uni: Universe):
     data = data_for(uni)
     if data is None or data[1] is None or "spread" not in data[1]:
@@ -483,12 +533,17 @@ def robustness_panel() -> list:
         html.Label(["Exclude tickers from the top/bottom buckets (comma-separated) ",
                     dcc.Input(id="rob-exclude", type="text", debounce=True, placeholder="e.g. GME, SBET",
                               style={"width": "260px"})], style={"display": "block", "margin": "0.6em 0"}),
+        html.Div([html.Label("Exclude sectors "),
+                  dcc.Dropdown(id="rob-sectors", multi=True, placeholder="none",
+                               style={"minWidth": "320px"})],
+                 style={"display": "flex", "alignItems": "center", "gap": "0.5em", "margin": "0.6em 0"}),
         dash_table.DataTable(
             id="rob-table", style_cell=_MONO, style_table={"overflowX": "auto"}, export_format="csv",
             columns=_pct_cols(["scenario", "months", "ann_return", "nw_tstat", "dsr", "survives_95"],
                               pct=("ann_return",), num=("nw_tstat", "dsr")),
             style_data_conditional=_verdict_styles()),
         dcc.Graph(id="rob-graph"),
+        dcc.Graph(id="rob-sector-graph"),
         html.Div(style={**_BOX, "fontSize": 13}, children=[
             html.B("Read these as diagnostics, not new tests. "),
             "Each perturbation tried here is another look at the same data, and the DSR's "
@@ -497,6 +552,25 @@ def robustness_panel() -> list:
             "verdict is the selection error the DSR exists to prevent.",
         ]),
     ]
+
+
+SCREENER_COLS = ["ticker", "sector", "f_score", "z_score", "o_score", "o_default_prob",
+                 "composite_score", "decile"]
+
+
+def screener_rows(uni: Universe, screens) -> tuple[list, str]:
+    data = data_for(uni)
+    if data is None:
+        return [], ""
+    xsec = latest_cross_section(data[0])
+    shown = apply_screens(xsec, screens)
+    caption = (f"Latest cross-section ({data[0]['as_of_date'].max():%Y-%m-%d}): "
+               f"{len(shown)} of {len(xsec)} names")
+    if screens:
+        caption += " pass " + " AND ".join(SCREENS[k][0] for k in screens)
+    caption += (". Filter boxes accept e.g. >5 or contains Tech. Click a row to open that "
+                "company's history; Export downloads the filtered table as CSV.")
+    return shown.to_dict("records"), caption
 
 
 def build_app(universe="sp500") -> Dash:
@@ -540,7 +614,22 @@ def build_app(universe="sp500") -> Dash:
             dcc.Store(id="job-seen", data=None),
             dcc.Interval(id="pipe-tick", interval=1000),
             dcc.Tabs(id="tabs", value="screener", children=[
-                tab("Screener table", "screener", html.Div(views["screener"], id="view-screener")),
+                tab("Screener table", "screener", [
+                    html.Div(views["screener"], id="view-screener"),
+                    dcc.Checklist(id="screens", value=[], inline=True,
+                                  options=[{"label": f" {label} ", "value": k}
+                                           for k, (label, _) in SCREENS.items()],
+                                  style={"margin": "0.8em 0", "fontSize": 13}),
+                    html.P(id="screener-caption"),
+                    dash_table.DataTable(
+                        id="screener-table", data=screener_rows(uni0, [])[0],
+                        columns=[{**c, "type": "numeric", "format": dash_table.FormatTemplate.percentage(3)}
+                                 if c["id"] == "o_default_prob" else c for c in _pct_cols(SCREENER_COLS)],
+                        filter_action="native", sort_action="native", page_size=25,
+                        export_format="csv", export_headers="display",
+                        style_table={"overflowX": "auto"}, style_cell=_MONO,
+                        style_data_conditional=[{"if": {"state": "active"}, "backgroundColor": "#e8f0fe"}]),
+                ]),
                 tab("Company detail", "company", [
                     dcc.Dropdown(id="company", options=options, value=first, clearable=False,
                                  placeholder="Pick a ticker", style={"width": "300px", "marginTop": "1em"}),
@@ -553,7 +642,8 @@ def build_app(universe="sp500") -> Dash:
                 tab("Validation", "validation", html.Div(views["validation"], id="view-validation")),
                 tab("Month explorer", "month", month_panel(*_month_options(uni0))),
                 tab("Robustness", "robust", robustness_panel()),
-                tab("All runs", "overview", html.Div(overview_panel(bases), id="view-overview")),
+                tab("All runs", "overview", [html.Div(overview_panel(bases), id="view-overview"),
+                                             *compare_panel(bases)]),
                 tab("Run pipeline", "pipeline", _pipeline_panel(uni0)),
             ]),
         ],
@@ -620,19 +710,25 @@ def build_app(universe="sp500") -> Dash:
         return f"{pd.Timestamp(click['points'][0]['x']):%Y-%m-%d}"
 
     @app.callback(Output("rob-table", "data"), Output("rob-graph", "figure"),
+                  Output("rob-sector-graph", "figure"), Output("rob-sectors", "options"),
                   Input("rob-winsor", "value"), Input("rob-top", "value"),
                   Input("rob-bottom", "value"), Input("rob-exclude", "value"),
+                  Input("rob-sectors", "value"),
                   Input("universe", "value"), Input("survivorship", "value"),
                   Input("data-version", "data"))
-    def _robust(winsor, top, bottom, exclude, name, surv, _version):
+    def _robust(winsor, top, bottom, exclude, sectors, name, surv, _version):
         uni = resolve(name, surv)
         data = data_for(uni)
+        empty = go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
         if data is None or data[1] is None or "spread" not in data[1]:
-            return [], go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
+            return [], empty, empty, []
         panel, dec = data[0], data[1]
+        all_sectors = sorted(panel["sector"].dropna().unique())
+        sectors = [x for x in (sectors or []) if x in all_sectors]
         tickers = [t for t in (exclude or "").split(",") if t.strip()]
-        excl = analysis.spread_excluding(panel, tickers, uni.n_buckets) if tickers else None
-        label = "Excluding " + ", ".join(t.strip().upper() for t in tickers) if tickers else ""
+        excl = (analysis.spread_excluding(panel, tickers, uni.n_buckets, sectors)
+                if tickers or sectors else None)
+        label = "Excluding " + ", ".join([t.strip().upper() for t in tickers] + sectors)
         table = analysis.robustness_table(dec["spread"], float(winsor or 0), int(top or 0),
                                           int(bottom or 0), excl, label)
         fig = go.Figure()
@@ -645,7 +741,20 @@ def build_app(universe="sp500") -> Dash:
                           legend=dict(orientation="h", y=-0.2))
         if not uni.backtestable:
             fig.update_layout(title="Cumulative composite spread [descriptive only — not a test]")
-        return table.to_dict("records"), fig
+        return (table.to_dict("records"), fig, fig_sector_attribution(panel, uni.n_buckets),
+                [{"label": x, "value": x} for x in all_sectors])
+
+    @app.callback(Output("compare-graph", "figure"),
+                  Input("compare-runs", "value"), Input("data-version", "data"))
+    def _compare(keys, _version):
+        runs = [r for r in analysis.available_runs(bases) if r["key"] in (keys or [])]
+        return fig_compare(analysis.cumulative_spreads(runs))
+
+    @app.callback(Output("screener-table", "data"), Output("screener-caption", "children"),
+                  Input("screens", "value"), Input("universe", "value"),
+                  Input("survivorship", "value"), Input("data-version", "data"))
+    def _screener(screens, name, surv, _version):
+        return screener_rows(resolve(name, surv), screens)
 
     @app.callback(Output("company-graph", "figure"),
                   Input("company", "value"), Input("universe", "value"),

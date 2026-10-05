@@ -107,8 +107,9 @@ def month_buckets(panel: pd.DataFrame, date, n_buckets: int) -> dict:
 # Robustness
 # ---------------------------------------------------------------------------
 
-def spread_excluding(panel: pd.DataFrame, tickers, n_buckets: int) -> pd.Series:
-    """Top-minus-bottom spread with `tickers` removed from every bucket.
+def spread_excluding(panel: pd.DataFrame, tickers, n_buckets: int, sectors=()) -> pd.Series:
+    """Top-minus-bottom spread with `tickers` (and any names in `sectors`)
+    removed from every bucket.
 
     Bucket assignments are kept as the backtest made them — removing a name
     does not re-rank the others — which is the question being asked: how
@@ -118,6 +119,8 @@ def spread_excluding(panel: pd.DataFrame, tickers, n_buckets: int) -> pd.Series:
     x = panel[panel["decile"].isin([1, n_buckets]) & panel["fwd_ret_1m"].notna()]
     if drop:
         x = x[~x["ticker"].str.upper().isin(drop)]
+    if sectors:
+        x = x[~x["sector"].isin(set(sectors))]
     means = x.groupby(["as_of_date", "decile"])["fwd_ret_1m"].mean().unstack()
     if n_buckets not in means or 1 not in means:
         return pd.Series(dtype=float)
@@ -155,4 +158,63 @@ def robustness_table(spread: pd.Series, winsor_pct: float = 1.0, drop_top: int =
     if excluded is not None:
         rows.append((excluded_label or "Excluding names", _stats(excluded)))
     out = pd.DataFrame([{"scenario": k, **v} for k, v in rows])
+    return out
+
+
+def sector_attribution(panel: pd.DataFrame, n_buckets: int) -> pd.DataFrame:
+    """Each sector's share of the composite spread over the whole sample.
+
+    Per month, a sector contributes the sum of its top-bucket names'
+    returns over the top bucket's size, minus the same for the bottom
+    bucket — so sector contributions add up exactly to that month's
+    spread. Reported as mean monthly contribution x 12 (arithmetic, so the
+    column sums to the spread's arithmetic mean x 12, not to the
+    compounded annual return in the validation table).
+    """
+    x = panel[panel["decile"].isin([1, n_buckets]) & panel["fwd_ret_1m"].notna()].copy()
+    if x.empty:
+        return pd.DataFrame(columns=["sector", "ann_contribution", "avg_top_names", "avg_bottom_names"])
+    x["sector"] = x["sector"].fillna("Unknown")
+    size = x.groupby(["as_of_date", "decile"])["ticker"].transform("size")
+    x["contribution"] = np.where(x["decile"] == n_buckets, 1.0, -1.0) * x["fwd_ret_1m"] / size
+    months = x["as_of_date"].nunique()
+    per_month = x.groupby(["as_of_date", "sector"])["contribution"].sum().unstack(fill_value=0.0)
+    out = pd.DataFrame({
+        "ann_contribution": per_month.sum() / months * 12,
+        "avg_top_names": x[x["decile"] == n_buckets].groupby("sector").size() / months,
+        "avg_bottom_names": x[x["decile"] == 1].groupby("sector").size() / months,
+    }).fillna(0.0)
+    out.index.name = "sector"
+    return out.sort_values("ann_contribution").reset_index()
+
+
+# ---------------------------------------------------------------------------
+# Run comparison
+# ---------------------------------------------------------------------------
+
+def available_runs(universes: dict[str, Universe] | None = None,
+                   survivorship_supported=lambda name: name in ("sp500", "kospi")) -> list[dict]:
+    """Every (universe, mode) with a bucket-return series on disk."""
+    universes = universes or UNIVERSES
+    runs = []
+    for name, base in universes.items():
+        for uni in [base] + ([base.corrected()] if survivorship_supported(name) else []):
+            if not Path(uni.bucket_returns_path).exists():
+                continue
+            mode = "corrected" if uni.survivorship_corrected else "static"
+            label = f"{name} ({mode}, {uni.currency})" + ("" if uni.backtestable else " — descriptive")
+            runs.append({"key": f"{name}|{mode}", "label": label, "universe": uni})
+    return runs
+
+
+def cumulative_spreads(runs: list[dict]) -> dict[str, pd.Series]:
+    """Compounded composite spread per run, each from its own first month.
+    Local-currency returns: compare shapes and timing across markets, not
+    levels (see FINDINGS.md on currency)."""
+    out = {}
+    for r in runs:
+        d = pd.read_parquet(r["universe"].bucket_returns_path)
+        if "spread" in d:
+            s = d["spread"].dropna()
+            out[r["label"]] = (1 + s).cumprod() - 1
     return out

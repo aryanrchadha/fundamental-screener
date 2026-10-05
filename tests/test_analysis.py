@@ -86,3 +86,37 @@ def test_overview_reads_composite_rows_and_flags_stale(tmp_path):
     assert len(df) == 1 and df.iloc[0]["stale"] and df.iloc[0]["dsr"] == 0.3
     assert analysis.run_overview({"sp500": replace(uni, validation_path=tmp_path / "none.csv")},
                                  survivorship_supported=lambda n: False).empty
+
+
+def test_sector_contributions_sum_to_the_arithmetic_spread():
+    p = _panel()
+    a = analysis.sector_attribution(p, 5)
+    spread = analysis.spread_excluding(p, [], 5)
+    assert a["ann_contribution"].sum() == pytest.approx(spread.mean() * 12)
+    assert set(a["sector"]) == {"Energy", "Tech"}
+    assert (a["avg_top_names"] + a["avg_bottom_names"]).sum() == pytest.approx(20)  # 10 + 10 per month
+
+
+def test_excluding_a_sector_drops_all_its_names():
+    p = _panel()
+    only_tech = analysis.spread_excluding(p, [], 5, sectors=["Energy"])
+    manual = analysis.spread_excluding(p[p["sector"] == "Tech"], [], 5)
+    pd.testing.assert_series_equal(only_tech, manual)
+
+
+def test_threshold_screens_use_published_cutoffs_and_fail_missing_scores():
+    from dashboard.app import apply_screens, latest_cross_section
+
+    d = pd.Timestamp("2025-12-31")
+    p = pd.DataFrame({
+        "as_of_date": d, "ticker": ["A", "B", "C", "D"], "sector": "X",
+        "f_score": [9.0, 8.0, 3.0, np.nan], "z_score": [3.5, 2.0, 1.0, 5.0],
+        "o_score": [-5.0, 0.0, 1.0, -3.0], "composite_score": [1.0, 0.5, -1.0, 0.2], "decile": 1.0,
+    })
+    x = latest_cross_section(p)
+    assert x.set_index("ticker").loc["B", "o_default_prob"] == pytest.approx(0.5)
+    assert list(apply_screens(x, ["f_high"])["ticker"]) == ["A", "B"]          # D has no F: fails
+    assert list(apply_screens(x, ["f_high", "z_safe"])["ticker"]) == ["A"]      # AND, not OR
+    assert list(apply_screens(x, ["z_grey"])["ticker"]) == ["B"]
+    assert list(apply_screens(x, ["o_risk"])["ticker"]) == ["C"]                # O > 0 strictly
+    assert len(apply_screens(x, [])) == 4
