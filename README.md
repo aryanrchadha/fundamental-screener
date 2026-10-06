@@ -720,6 +720,18 @@ Everything the CLI does is reachable from the page:
   sectors. A sector-attribution chart shows each sector's share of the
   spread (contributions sum to it). Labeled as diagnostics:
   the DSR's N_trials = 4 does not count the perturbations you try.
+- **Legs & horizon** — splits the spread into long leg vs the ranked
+  universe and short leg vs it (they sum exactly), gives the spread's beta
+  to the market and its mean in up vs down months, and re-holds the same
+  buckets for 1/3/6/12 months (Newey-West lag ≥ k − 1; 1 month reproduces
+  the backtest exactly). Russell 3000: beta +0.43, +2.1%/month in up
+  markets vs −1.0% in down, and almost all of the spread is the long leg —
+  the junk-rally reading in numbers. S&P 500: the loss is the short leg
+  (worst-ranked names beat the universe, t −2.13).
+- **Download report** — one self-contained HTML file (opens offline) for
+  the current universe and mode: validation, legs, robustness, costs,
+  horizons and the key charts, stamped with when each artifact it read was
+  written, and carrying the stale warning if one applies.
 - **Costs** — one-way turnover of the top and bottom buckets each month,
   the spread net of a trading cost you set, and two break-evens: the cost
   at which the mean spread reaches zero and the cost at which the DSR drops

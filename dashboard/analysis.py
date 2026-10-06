@@ -293,3 +293,120 @@ def dsr_fail_cost_bps(spread: pd.Series, turnover: pd.DataFrame, hi: float = 100
         mid = (lo + hi) / 2
         lo, hi = (mid, hi) if survives(mid) else (lo, mid)
     return round(hi, 1)
+
+
+# ---------------------------------------------------------------------------
+# Legs and market exposure
+# ---------------------------------------------------------------------------
+
+def leg_decomposition(panel: pd.DataFrame, n_buckets: int) -> pd.DataFrame:
+    """Split the spread into what the long leg earned over the ranked
+    universe and what the short leg gave up under it.
+
+    `market` is the equal-weight return of every ranked name (any bucket),
+    so long_excess + short_excess = spread exactly. A spread earned mostly
+    by the short leg would be hard to capture in practice (borrow costs,
+    short constraints on small caps); a long-only investor only gets
+    long_excess.
+    """
+    x = panel[panel["decile"].notna() & panel["fwd_ret_1m"].notna()]
+    market = x.groupby("as_of_date")["fwd_ret_1m"].mean()
+    legs = x[x["decile"].isin([1, n_buckets])].groupby(["as_of_date", "decile"])["fwd_ret_1m"].mean().unstack()
+    if n_buckets not in legs or 1 not in legs:
+        return pd.DataFrame()
+    out = pd.DataFrame({"market": market, "top": legs[n_buckets], "bottom": legs[1]}).dropna()
+    out["long_excess"] = out["top"] - out["market"]
+    out["short_excess"] = out["market"] - out["bottom"]
+    out["spread"] = out["top"] - out["bottom"]
+    return out
+
+
+def market_exposure(legs: pd.DataFrame) -> dict:
+    """Beta and correlation of the spread to the ranked-universe return, and
+    the spread's mean in up vs down markets. A distress-ranked spread that
+    is really a bet on junk rallying with the market shows up as a large
+    beta and an up/down gap."""
+    if legs.empty or len(legs) < 3:
+        return {}
+    m, s = legs["market"], legs["spread"]
+    beta = float(np.cov(s, m, ddof=1)[0, 1] / m.var(ddof=1))
+    up, down = s[m > 0], s[m <= 0]
+    return {"beta": beta, "corr": float(s.corr(m)),
+            "up_months": len(up), "down_months": len(down),
+            "up_mean": float(up.mean()) if len(up) else np.nan,
+            "down_mean": float(down.mean()) if len(down) else np.nan}
+
+
+def leg_table(legs: pd.DataFrame) -> pd.DataFrame:
+    """Stats per leg. The two raw rows carry the equity premium, so a DSR
+    'pass' on them says stocks went up, not that the ranking worked: their
+    verdict columns are blanked rather than shown."""
+    rows = [("Spread (top − bottom)", legs["spread"], True),
+            ("Long leg vs universe (top − market)", legs["long_excess"], True),
+            ("Short leg vs universe (market − bottom)", legs["short_excess"], True),
+            ("Top bucket, raw", legs["top"], False),
+            ("Ranked universe, raw (equal weight)", legs["market"], False)]
+    out = []
+    for name, series, relative in rows:
+        st = _stats(series)
+        if not relative:
+            st.update(dsr=np.nan, survives_95=None)
+        out.append({"scenario": name, **st})
+    return pd.DataFrame(out)
+
+
+# ---------------------------------------------------------------------------
+# Signal horizon
+# ---------------------------------------------------------------------------
+
+def forward_returns(prices: pd.DataFrame, k: int) -> pd.DataFrame:
+    """k-month forward return at each month-end, compounded from the same
+    month-over-month returns the backtest uses (screener.prices
+    .monthly_returns), so k = 1 is exactly the panel's fwd_ret_1m. A name
+    missing any month inside the window gets NaN rather than a partial
+    return."""
+    from screener.prices import monthly_returns
+
+    r = monthly_returns(prices)
+    growth = (1 + r).rolling(k, min_periods=k).apply(np.prod, raw=True) - 1
+    return growth.shift(-k)
+
+
+def horizon_spreads(panel: pd.DataFrame, prices: pd.DataFrame, n_buckets: int,
+                    horizons=(1, 3, 6, 12)) -> dict[int, pd.Series]:
+    """Top-minus-bottom spread of the SAME bucket assignments held for k
+    months, for each k. One observation per rebalance date, so for k > 1
+    consecutive observations overlap by k − 1 months."""
+    x = panel[panel["decile"].isin([1, n_buckets])][["as_of_date", "ticker", "decile"]]
+    out = {}
+    for k in horizons:
+        fwd = forward_returns(prices, k).stack(future_stack=True).rename("fwd").reset_index()
+        fwd.columns = ["as_of_date", "ticker", "fwd"]
+        m = x.merge(fwd, on=["as_of_date", "ticker"], how="left").dropna(subset=["fwd"])
+        legs = m.groupby(["as_of_date", "decile"])["fwd"].mean().unstack()
+        if n_buckets in legs and 1 in legs:
+            out[k] = (legs[n_buckets] - legs[1]).dropna().rename(f"spread_{k}m")
+    return out
+
+
+def horizon_table(spreads: dict[int, pd.Series]) -> pd.DataFrame:
+    """Per horizon: the k-month spread, its annualized equivalent, and a
+    Newey-West t-stat with lag >= k − 1 to cover the overlap. No Deflated
+    Sharpe here: overlapping observations break its independence
+    assumption, and these horizons were not part of the four trials."""
+    import statsmodels.api as sm
+
+    from screener.validation import newey_west_lag
+
+    rows = []
+    for k, s in spreads.items():
+        s = s.dropna()
+        if len(s) < 24:
+            continue
+        lag = max(newey_west_lag(len(s)), k - 1)
+        fit = sm.OLS(s.to_numpy(), np.ones((len(s), 1))).fit(cov_type="HAC", cov_kwds={"maxlags": lag})
+        mean_k = float(fit.params[0])
+        rows.append({"horizon_months": k, "obs": len(s), "mean_spread": mean_k,
+                     "annualized": (1 + mean_k) ** (12 / k) - 1 if mean_k > -1 else np.nan,
+                     "nw_tstat": float(fit.tvalues[0]), "nw_lag": lag})
+    return pd.DataFrame(rows)

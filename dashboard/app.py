@@ -26,6 +26,7 @@ from plotly.subplots import make_subplots
 import config
 from dashboard import analysis
 from dashboard.grids import col, grid, register_exports, row_rule
+from dashboard.report import build_report
 from dashboard.jobs import RUNNER, STEPS, step_commands, survivorship_supported
 from screener.universes import UNIVERSES, Universe, get_universe
 
@@ -236,6 +237,12 @@ def _turnover_cached(uni: Universe, mtimes: tuple) -> pd.DataFrame:
     return analysis.bucket_turnover(data_for(uni)[0], uni.n_buckets)
 
 
+@lru_cache(maxsize=8)
+def _horizons_cached(uni: Universe, mtimes: tuple, prices_mtime: float) -> dict:
+    prices = pd.read_parquet(uni.prices_cache)
+    return analysis.horizon_spreads(data_for(uni)[0], prices, uni.n_buckets)
+
+
 def data_for(uni: Universe):
     """load_data, cached until any of the universe's artifacts change.
     Returns None when the scores panel has not been produced yet."""
@@ -293,16 +300,21 @@ def _unavailable(uni: Universe, view: str) -> html.Div:
     ])
 
 
-def stale_warning(uni: Universe):
-    """A banner when the validation outputs predate the backtest they claim
-    to summarize. That happens whenever the backtest is re-run (e.g. on a
-    50-ticker test universe) without re-running validation: the table and
-    rolling chart then describe a panel that no longer exists on disk."""
+def stale_artifacts(uni: Universe) -> list[str]:
+    """Validation outputs older than the backtest they claim to summarize.
+    That happens whenever the backtest is re-run (e.g. on a 50-ticker test
+    universe) without re-running validation: the table and rolling chart
+    then describe a panel that no longer exists on disk."""
     if not uni.backtestable:
-        return None                          # India's rolling chart is written by the backtest itself
+        return []                            # India's rolling chart is written by the backtest itself
     bt = _mtime(uni.bucket_returns_path)
-    stale = [label for label, attr in (("Validation", "validation_path"), ("Rolling spread", "rolling_path"))
-             if 0 < _mtime(getattr(uni, attr)) < bt]
+    return [label for label, attr in (("Validation", "validation_path"), ("Rolling spread", "rolling_path"))
+            if 0 < _mtime(getattr(uni, attr)) < bt]
+
+
+def stale_warning(uni: Universe):
+    """The banner form of stale_artifacts, for the Validation/Rolling tabs."""
+    stale = stale_artifacts(uni)
     if not stale:
         return None
     return html.Div(style={**_BOX, "background": "#fdecea", "border": "1px solid #e57373"}, children=[
@@ -410,7 +422,7 @@ VERDICT_COLS = [col("scenario", minWidth=260), col("months"), col("ann_return", 
 
 # Every grid in the app, for register_exports (see its docstring).
 GRID_IDS = ["screener-table", "validation-grid", "month-table", "rob-table", "cost-table",
-            "watch-table", "overview-grid"]
+            "watch-table", "overview-grid", "legs-grid", "horizon-grid"]
 
 
 def overview_panel(universes=None) -> list:
@@ -642,6 +654,94 @@ def watchlist_rows(panel: pd.DataFrame, tickers) -> list:
     return rows
 
 
+def legs_panel() -> list:
+    return [
+        html.H4("Which leg earned the spread, and is it market beta?", style={"marginTop": "1em"}),
+        html.Div(id="legs-summary", style={"marginBottom": "0.6em"}),
+        grid("legs-grid", VERDICT_COLS, row_rules=VERDICT_RULES),
+        html.P("market = equal-weight return of every ranked name, so long + short = spread "
+               "exactly. Raw rows include the equity premium; their DSR is left blank because "
+               "a 'pass' there would only say stocks went up.",
+               style={"color": "#666", "fontSize": 13}),
+        html.Div(style={"display": "flex", "flexWrap": "wrap"}, children=[
+            dcc.Graph(id="legs-graph", style={"flex": "1 1 520px"}),
+            dcc.Graph(id="legs-scatter", style={"flex": "1 1 380px"}),
+        ]),
+        html.H4("Signal horizon: hold the same buckets for k months", style={"marginTop": "1.5em"}),
+        grid("horizon-grid", [col("horizon_months"), col("obs"), col("mean_spread", "pct1"),
+                              col("annualized", "pct1"), col("nw_tstat", "num3"), col("nw_lag")]),
+        dcc.Graph(id="horizon-graph"),
+        html.P("Longer horizons overlap month to month, so the Newey-West lag is at least k − 1. "
+               "No Deflated Sharpe: overlapping observations break its assumptions, and these "
+               "horizons were not among the four trials. A signal that strengthens with k is "
+               "slow-moving (cheaper to trade); one that fades is short-lived.",
+               style={"color": "#666", "fontSize": 13}),
+    ]
+
+
+def report_for(uni: Universe) -> tuple[str, str] | None:
+    """(filename, html) snapshot of one run, or None with no scores panel."""
+    data = data_for(uni)
+    if data is None:
+        return None
+    panel, dec, summary, roll = data
+    mode = "survivorship-corrected" if uni.survivorship_corrected else "static"
+    sections = []
+    if summary is not None:
+        sections.append(("Validation (Newey-West / Deflated Sharpe)", [
+            summary.reset_index(),
+            "survives_95 = DSR > 0.95 after correcting for 4 related trials (F, Z, O, composite).",
+        ]))
+    elif not uni.backtestable:
+        sections.append(("Validation", ["Not produced: this universe is screener-only, with too few "
+                                        "independent cross-sections for inference."]))
+    if dec is not None and "spread" in dec:
+        spread = dec["spread"].dropna()
+        sections.append(("Bucket returns", [fig_decile_cumret(dec, uni.n_buckets)]))
+        if roll is not None:
+            sections.append(("Rolling spread", [fig_rolling(roll, uni.name, uni.backtestable)]))
+        legs = analysis.leg_decomposition(panel, uni.n_buckets)
+        if not legs.empty:
+            ex = analysis.market_exposure(legs)
+            sections.append(("Legs and market exposure", [
+                analysis.leg_table(legs),
+                f"Spread beta to the ranked universe {ex['beta']:+.2f} (correlation {ex['corr']:+.2f}); "
+                f"mean monthly spread {ex['up_mean']:+.2%} in up markets, {ex['down_mean']:+.2%} in down.",
+            ]))
+        sections.append(("Robustness", [
+            analysis.robustness_table(spread, 1.0, 2, 0),
+            fig_sector_attribution(panel, uni.n_buckets),
+        ]))
+        turn = _turnover_cached(uni, _artifact_mtimes(uni))
+        be, fail = analysis.breakeven_cost_bps(spread, turn), analysis.dsr_fail_cost_bps(spread, turn)
+        avg = turn.mean()
+        note = f"Average one-way turnover: top {avg['top']:.1%}, bottom {avg['bottom']:.1%} per rebalance."
+        if not np.isnan(be):
+            note += f" Mean net spread reaches zero at {be:.0f} bps one-way."
+        if not np.isnan(fail):
+            note += (f" DSR drops to 0.95 at {fail:.1f} bps one-way." if fail < 1000
+                     else " DSR survives even at 1,000 bps one-way.")
+        sections.append(("Trading costs", [analysis.cost_table(spread, turn), note]))
+        if Path(uni.prices_cache).exists():
+            hs = _horizons_cached(uni, _artifact_mtimes(uni), _mtime(uni.prices_cache))
+            sections.append(("Signal horizon", [
+                analysis.horizon_table(hs),
+                "Newey-West lag >= k - 1 for overlapping k-month holds; no DSR (not among the four trials).",
+            ]))
+    if not uni.backtestable:
+        sections.insert(0, ("Read this first", ["Descriptive only: this universe is not backtestable. "
+                                                "No number below is a statistical test."]))
+    stale = stale_artifacts(uni)
+    warning = (f"Stale: {' and '.join(stale)} predate the backtest output, so they describe an "
+               "earlier scores panel." if stale else None)
+    artifacts = [(label, _mtime(getattr(uni, attr))) for label, attr in ARTIFACTS]
+    page = build_report(
+        f"Composite Fundamental Screener — {uni.name} ({mode})",
+        f"{_subtitle(uni)} Latest cross-section {panel['as_of_date'].max():%Y-%m-%d}.",
+        sections, artifacts, warning)
+    return f"screener-report-{uni.name}-{mode}-{time.strftime('%Y%m%d')}.html", page
+
+
 def build_app(universe="sp500") -> Dash:
     uni0 = get_universe(universe) if isinstance(universe, str) else universe
     # Base (uncorrected) universe per name. A Universe object passed in
@@ -676,6 +776,8 @@ def build_app(universe="sp500") -> Dash:
                               options=[{"label": " survivorship-corrected", "value": "on",
                                         "disabled": not survivorship_supported(uni0.name)}]),
                 html.Button("Reload data", id="reload", n_clicks=0),
+                html.Button("Download report", id="report-btn", n_clicks=0),
+                dcc.Download(id="report-download"),
             ]),
             html.P(_subtitle(uni0), id="subtitle", style={"color": "#666"}),
             html.Div(artifact_status(uni0), id="data-status", style={"fontSize": 12, "marginBottom": "0.8em"}),
@@ -705,6 +807,7 @@ def build_app(universe="sp500") -> Dash:
                 tab("Validation", "validation", html.Div(views["validation"], id="view-validation")),
                 tab("Month explorer", "month", month_panel(*_month_options(uni0))),
                 tab("Robustness", "robust", robustness_panel()),
+                tab("Legs & horizon", "legs", legs_panel()),
                 tab("Watchlist", "watch", watchlist_panel()),
                 tab("Costs", "costs", costs_panel()),
                 tab("All runs", "overview", [html.Div(overview_panel(bases), id="view-overview"),
@@ -892,6 +995,72 @@ def build_app(universe="sp500") -> Dash:
         if data is None:
             return go.Figure(layout=dict(title="No scores panel for this universe", height=300)), []
         return fig_watchlist(data[0], tickers, metric, uni.n_buckets), watchlist_rows(data[0], tickers)
+
+    @app.callback(Output("legs-summary", "children"), Output("legs-grid", "rowData"),
+                  Output("legs-graph", "figure"), Output("legs-scatter", "figure"),
+                  Output("horizon-grid", "rowData"), Output("horizon-graph", "figure"),
+                  Input("universe", "value"), Input("survivorship", "value"),
+                  Input("data-version", "data"))
+    def _legs(name, surv, _version):
+        uni = resolve(name, surv)
+        data = data_for(uni)
+        empty = go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
+        if data is None or data[1] is None:
+            return "Run the backtest for this universe first.", [], empty, empty, [], empty
+        legs = analysis.leg_decomposition(data[0], uni.n_buckets)
+        if legs.empty:
+            return "No top/bottom buckets to decompose.", [], empty, empty, [], empty
+        ex = analysis.market_exposure(legs)
+        summary = [
+            html.B(f"Spread beta to the ranked universe: {ex['beta']:+.2f} "
+                   f"(correlation {ex['corr']:+.2f}). "),
+            f"Mean monthly spread {ex['up_mean']:+.2%} in the {ex['up_months']} up-market months, "
+            f"{ex['down_mean']:+.2%} in the {ex['down_months']} down-market months.",
+        ]
+        if not uni.backtestable:
+            summary += [html.Br(), html.I("Descriptive only — this universe is not backtestable.")]
+
+        fig = go.Figure()
+        for c, label, style in (("spread", "Spread", dict(color="black", width=2)),
+                                ("long_excess", "Long leg vs universe", {}),
+                                ("short_excess", "Short leg vs universe", {})):
+            fig.add_trace(go.Scatter(x=legs.index, y=(1 + legs[c]).cumprod() - 1, name=label, line=style))
+        fig.update_layout(title="Cumulative contribution by leg", yaxis_tickformat=".0%", height=400,
+                          legend=dict(orientation="h", y=-0.2))
+
+        sc = go.Figure(go.Scatter(x=legs["market"], y=legs["spread"], mode="markers", opacity=0.6,
+                                  text=[f"{d:%Y-%m}" for d in legs.index],
+                                  hovertemplate="%{text}: market %{x:.1%}, spread %{y:.1%}<extra></extra>",
+                                  showlegend=False))
+        xs = np.array([legs["market"].min(), legs["market"].max()])
+        a = legs["spread"].mean() - ex["beta"] * legs["market"].mean()
+        sc.add_trace(go.Scatter(x=xs, y=a + ex["beta"] * xs, mode="lines", name=f"beta {ex['beta']:+.2f}",
+                                line=dict(color="black")))
+        sc.update_layout(title="Monthly spread vs ranked-universe return", xaxis_tickformat=".0%",
+                         yaxis_tickformat=".0%", height=400, legend=dict(orientation="h", y=-0.2))
+
+        hrows, hfig = [], empty
+        if Path(uni.prices_cache).exists():
+            hs = _horizons_cached(uni, _artifact_mtimes(uni), _mtime(uni.prices_cache))
+            ht = analysis.horizon_table(hs)
+            hrows = ht.to_dict("records")
+            if not ht.empty:
+                hfig = go.Figure(go.Bar(
+                    x=[f"{k}m" for k in ht["horizon_months"]], y=ht["annualized"],
+                    text=[f"t {t:+.2f}" for t in ht["nw_tstat"]], textposition="outside",
+                    marker_color=["#2c7fb8" if v >= 0 else "#d62728" for v in ht["annualized"]]))
+                hfig.update_layout(title="Annualized spread by holding horizon (label: NW t-stat)",
+                                   yaxis_tickformat=".0%", height=360)
+        return summary, analysis.leg_table(legs).to_dict("records"), fig, sc, hrows, hfig
+
+    @app.callback(Output("report-download", "data"), Input("report-btn", "n_clicks"),
+                  State("universe", "value"), State("survivorship", "value"), prevent_initial_call=True)
+    def _report(_n, name, surv):
+        out = report_for(resolve(name, surv))
+        if out is None:
+            return no_update
+        filename, page = out
+        return dcc.send_string(page, filename)
 
     @app.callback(Output("compare-graph", "figure"),
                   Input("compare-runs", "value"), Input("data-version", "data"))

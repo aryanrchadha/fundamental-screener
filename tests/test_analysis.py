@@ -162,3 +162,52 @@ def test_breakeven_and_dsr_failure_costs():
     assert analysis._stats(analysis.net_of_costs(spread, turn, fail))["survives_95"] is False
     assert analysis._stats(analysis.net_of_costs(spread, turn, fail - 1))["survives_95"] is True
     assert np.isnan(analysis.breakeven_cost_bps(-spread, turn))
+
+
+def test_legs_sum_to_spread_and_beta_is_recovered():
+    rng = np.random.default_rng(3)
+    dates = pd.date_range("2015-01-31", periods=60, freq="ME")
+    mkt = rng.normal(0.01, 0.04, len(dates))
+    rows = []
+    for d, m in zip(dates, mkt):
+        for i in range(50):
+            b = i % 5 + 1
+            # top bucket has beta 1.5 to the market, everything else beta 1
+            r = (1.5 if b == 5 else 1.0) * m + rng.normal(0, 0.002)
+            rows.append(dict(as_of_date=d, ticker=f"T{i}", decile=float(b), fwd_ret_1m=r))
+    legs = analysis.leg_decomposition(pd.DataFrame(rows), 5)
+    assert np.allclose(legs["long_excess"] + legs["short_excess"], legs["spread"])
+    ex = analysis.market_exposure(legs)
+    assert ex["beta"] == pytest.approx(0.5 / 1.1, abs=0.05)   # (1.5 - 1) / market beta 1.1
+    assert ex["up_mean"] > 0 > ex["down_mean"]
+    t = analysis.leg_table(legs).set_index("scenario")
+    assert np.isnan(t.loc["Top bucket, raw", "dsr"]) and t.loc["Top bucket, raw", "survives_95"] is None
+
+
+def test_one_month_horizon_reproduces_the_backtest_forward_return():
+    dates = pd.date_range("2020-01-31", periods=30, freq="ME")
+    rng = np.random.default_rng(5)
+    prices = pd.DataFrame(100 * np.cumprod(1 + rng.normal(0.01, 0.05, (30, 10)), axis=0),
+                          index=dates, columns=[f"T{i}" for i in range(10)])
+    prices.iloc[:4, 0] = np.nan                                      # a late listing
+    rets = prices.pct_change(fill_method=None)
+    rows = [dict(as_of_date=d, ticker=t, decile=float(i % 2 + 1),
+                 fwd_ret_1m=rets[t].iloc[j + 1] if j + 1 < len(dates) else np.nan)
+            for j, d in enumerate(dates) for i, t in enumerate(prices.columns)]
+    panel = pd.DataFrame(rows)
+    hs = analysis.horizon_spreads(panel, prices, 2, horizons=(1, 3))
+    expected = analysis.spread_excluding(panel, [], 2)
+    pd.testing.assert_series_equal(hs[1], expected.dropna(), check_names=False, check_freq=False)
+    # 3-month return is the compounded product of three monthly returns
+    f3 = analysis.forward_returns(prices, 3)
+    manual = (1 + rets.shift(-1)) * (1 + rets.shift(-2)) * (1 + rets.shift(-3)) - 1
+    pd.testing.assert_frame_equal(f3, manual, check_freq=False)
+    assert len(hs[3]) == len(hs[1]) - 2
+
+
+def test_horizon_table_uses_at_least_k_minus_one_lags():
+    idx = pd.date_range("2010-01-31", periods=60, freq="ME")
+    rng = np.random.default_rng(2)
+    t = analysis.horizon_table({1: pd.Series(rng.normal(0, 0.02, 60), index=idx),
+                                12: pd.Series(rng.normal(0, 0.05, 60), index=idx)}).set_index("horizon_months")
+    assert t.loc[12, "nw_lag"] == 11 and t.loc[1, "nw_lag"] < 11
