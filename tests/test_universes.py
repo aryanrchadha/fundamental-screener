@@ -364,8 +364,16 @@ def test_screen_composite_is_equal_weight_not_fitted(tmp_path, monkeypatch):
     monkeypatch.setattr(type(INDIA), "tickers", lambda self: tickers)
     monkeypatch.setattr(type(INDIA), "sectors", lambda self: pd.Series("Tech", index=tickers))
 
+    # Every output path must point into tmp_path: run_screen also writes
+    # bucket returns (and a rolling spread when there are enough months),
+    # and an un-redirected path here once overwrote the real
+    # data/in_bucket_returns.parquet on every test run.
     uni = replace(INDIA, start="2025-01-01", end="2025-02-28",
-                  panel_path=tmp_path / "p.parquet")
+                  panel_path=tmp_path / "p.parquet",
+                  bucket_returns_path=tmp_path / "r.parquet",
+                  rolling_path=tmp_path / "roll.parquet",
+                  coefs_path=tmp_path / "c.parquet",
+                  validation_path=tmp_path / "v.csv")
     panel = bt.run_screen(uni)
     assert (panel["composite_score"] == 2.0).all()   # mean(1, 2, 3), no fitted weights
 
