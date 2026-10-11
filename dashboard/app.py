@@ -544,6 +544,11 @@ def robustness_panel() -> list:
         grid("rob-table", VERDICT_COLS, row_rules=VERDICT_RULES),
         dcc.Graph(id="rob-graph"),
         dcc.Graph(id="rob-sector-graph"),
+        html.H4("Block bootstrap", style={"marginTop": "1em"}),
+        html.Label(["Block length (months) ",
+                    dcc.Input(id="rob-block", type="number", value=6, min=1, max=24, step=1,
+                              debounce=True, style={"width": "4em"})]),
+        html.Div(id="rob-bootstrap", style={"margin": "0.6em 0"}),
         html.Div(style={**_BOX, "fontSize": 13}, children=[
             html.B("Read these as diagnostics, not new tests. "),
             "Each perturbation tried here is another look at the same data, and the DSR's "
@@ -654,6 +659,37 @@ def watchlist_rows(panel: pd.DataFrame, tickers) -> list:
     return rows
 
 
+def alpha_sentence(legs: pd.DataFrame) -> str:
+    ba = analysis.beta_adjusted(legs)
+    if not ba:
+        return ""
+    bs = analysis.block_bootstrap(legs["spread"], market=legs["market"])
+    ci = f", 95% block-bootstrap interval {bs['alpha_lo']:+.1%} to {bs['alpha_hi']:+.1%}" if bs else ""
+    return (f"Beta-adjusted: alpha {ba['alpha_ann']:+.1%}/yr (NW t {ba['alpha_t']:+.2f}{ci}) after "
+            f"removing beta {ba['beta']:+.2f} (t {ba['beta_t']:+.2f}, R² {ba['r2']:.2f}); raw spread "
+            f"{ba['raw_ann']:+.1%}/yr, both arithmetic. Beta is estimated on the full sample.")
+
+
+def bootstrap_summary(panel, dec, uni: Universe, block) -> list:
+    block = int(block or 6)
+    spread = dec["spread"].dropna()
+    bs = analysis.block_bootstrap(spread, block=block)
+    if not bs:
+        return ["Too few months to bootstrap at this block length."]
+    legs = analysis.leg_decomposition(panel, uni.n_buckets)
+    ba = analysis.block_bootstrap(legs["spread"], block=block, market=legs["market"]) if not legs.empty else {}
+    out = [html.B(f"{bs['reps']:,} resamples of {block}-month blocks. "),
+           f"Annualized mean {bs['ann_mean']:+.1%} (95%: {bs['ann_mean_lo']:+.1%} to {bs['ann_mean_hi']:+.1%}); "
+           f"Sharpe {bs['sharpe']:+.2f} ({bs['sharpe_lo']:+.2f} to {bs['sharpe_hi']:+.2f}); "
+           f"{bs['p_nonpositive']:.1%} of resamples have a non-positive mean."]
+    if ba.get("alpha_ann") is not None:
+        out += [html.Br(), f"Beta-adjusted alpha {ba['alpha_ann']:+.1%}/yr (95%: {ba['alpha_lo']:+.1%} to "
+                           f"{ba['alpha_hi']:+.1%}); {ba['p_alpha_nonpositive']:.1%} of resamples at or below zero."]
+    out += [html.Br(), html.I("A single-test interval: it does not correct for the four trials the "
+                              "DSR accounts for, so an interval excluding zero is necessary, not sufficient.")]
+    return out
+
+
 def legs_panel() -> list:
     return [
         html.H4("Which leg earned the spread, and is it market beta?", style={"marginTop": "1em"}),
@@ -707,9 +743,14 @@ def report_for(uni: Universe) -> tuple[str, str] | None:
                 analysis.leg_table(legs),
                 f"Spread beta to the ranked universe {ex['beta']:+.2f} (correlation {ex['corr']:+.2f}); "
                 f"mean monthly spread {ex['up_mean']:+.2%} in up markets, {ex['down_mean']:+.2%} in down.",
+                alpha_sentence(legs),
             ]))
+        bs = analysis.block_bootstrap(spread)
         sections.append(("Robustness", [
             analysis.robustness_table(spread, 1.0, 2, 0),
+            (f"6-month block bootstrap ({bs['reps']:,} resamples): annualized mean 95% interval "
+             f"{bs['ann_mean_lo']:+.1%} to {bs['ann_mean_hi']:+.1%}, Sharpe {bs['sharpe_lo']:+.2f} to "
+             f"{bs['sharpe_hi']:+.2f}; single-test, no multiple-testing correction." if bs else ""),
             fig_sector_attribution(panel, uni.n_buckets),
         ]))
         turn = _turnover_cached(uni, _artifact_mtimes(uni))
@@ -879,17 +920,18 @@ def build_app(universe="sp500") -> Dash:
 
     @app.callback(Output("rob-table", "rowData"), Output("rob-graph", "figure"),
                   Output("rob-sector-graph", "figure"), Output("rob-sectors", "options"),
+                  Output("rob-bootstrap", "children"), Input("rob-block", "value"),
                   Input("rob-winsor", "value"), Input("rob-top", "value"),
                   Input("rob-bottom", "value"), Input("rob-exclude", "value"),
                   Input("rob-sectors", "value"),
                   Input("universe", "value"), Input("survivorship", "value"),
                   Input("data-version", "data"))
-    def _robust(winsor, top, bottom, exclude, sectors, name, surv, _version):
+    def _robust(block, winsor, top, bottom, exclude, sectors, name, surv, _version):
         uni = resolve(name, surv)
         data = data_for(uni)
         empty = go.Figure(layout=dict(title="No bucket returns for this universe", height=300))
         if data is None or data[1] is None or "spread" not in data[1]:
-            return [], empty, empty, []
+            return [], empty, empty, [], ""
         panel, dec = data[0], data[1]
         all_sectors = sorted(panel["sector"].dropna().unique())
         sectors = [x for x in (sectors or []) if x in all_sectors]
@@ -910,7 +952,7 @@ def build_app(universe="sp500") -> Dash:
         if not uni.backtestable:
             fig.update_layout(title="Cumulative composite spread [descriptive only — not a test]")
         return (table.to_dict("records"), fig, fig_sector_attribution(panel, uni.n_buckets),
-                [{"label": x, "value": x} for x in all_sectors])
+                [{"label": x, "value": x} for x in all_sectors], bootstrap_summary(panel, dec, uni, block))
 
     @app.callback(Output("cost-summary", "children"), Output("cost-table", "rowData"),
                   Output("cost-graph", "figure"), Output("turnover-graph", "figure"),
@@ -1016,6 +1058,7 @@ def build_app(universe="sp500") -> Dash:
                    f"(correlation {ex['corr']:+.2f}). "),
             f"Mean monthly spread {ex['up_mean']:+.2%} in the {ex['up_months']} up-market months, "
             f"{ex['down_mean']:+.2%} in the {ex['down_months']} down-market months.",
+            html.Br(), alpha_sentence(legs),
         ]
         if not uni.backtestable:
             summary += [html.Br(), html.I("Descriptive only — this universe is not backtestable.")]

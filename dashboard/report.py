@@ -72,11 +72,13 @@ def build_report(title: str, subtitle: str, sections: list[tuple[str, list]],
     for heading, items in sections:
         parts.append(f"<h2>{html.escape(heading)}</h2>")
         for item in items:
+            if item is None or (isinstance(item, str) and not item):
+                continue                     # optional notes that had nothing to say
             if isinstance(item, pd.DataFrame):
                 parts.append(table_html(item))
             elif isinstance(item, str):
                 parts.append(f"<div class='note'>{html.escape(item)}</div>")
-            elif item is not None:
+            else:
                 parts.append(pio.to_html(item, full_html=False, include_plotlyjs=first_fig,
                                          config={"displaylogo": False}))
                 first_fig = False

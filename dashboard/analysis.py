@@ -410,3 +410,83 @@ def horizon_table(spreads: dict[int, pd.Series]) -> pd.DataFrame:
                      "annualized": (1 + mean_k) ** (12 / k) - 1 if mean_k > -1 else np.nan,
                      "nw_tstat": float(fit.tvalues[0]), "nw_lag": lag})
     return pd.DataFrame(rows)
+
+
+def beta_adjusted(legs: pd.DataFrame) -> dict:
+    """Regress the spread on the ranked-universe return with Newey-West
+    errors: spread_t = alpha + beta * market_t + e_t.
+
+    alpha is what the ranking earned beyond its market exposure. Two
+    caveats travel with it: beta is estimated on the full sample (an
+    attribution, not something an investor could have hedged in real time
+    at exactly that ratio), and `market` is the equal-weight average of the
+    same ranked names, not an external index.
+    """
+    import statsmodels.api as sm
+
+    from screener.validation import newey_west_lag
+
+    if legs.empty or len(legs) < 24:
+        return {}
+    lag = newey_west_lag(len(legs))
+    fit = sm.OLS(legs["spread"].to_numpy(), sm.add_constant(legs["market"].to_numpy())).fit(
+        cov_type="HAC", cov_kwds={"maxlags": lag})
+    return {"alpha_monthly": float(fit.params[0]), "alpha_ann": float(fit.params[0]) * 12,
+            "alpha_t": float(fit.tvalues[0]), "beta": float(fit.params[1]),
+            "beta_t": float(fit.tvalues[1]), "r2": float(fit.rsquared), "nw_lag": lag,
+            "raw_ann": float(legs["spread"].mean()) * 12}
+
+
+# ---------------------------------------------------------------------------
+# Block bootstrap
+# ---------------------------------------------------------------------------
+
+def block_bootstrap(spread: pd.Series, block: int = 6, reps: int = 5000, seed: int = 0,
+                    market: pd.Series | None = None) -> dict:
+    """Moving-block bootstrap of the monthly spread.
+
+    Resamples contiguous `block`-month runs (wrapping at the end) so the
+    resampled series keeps the original's short-range autocorrelation and
+    volatility clustering. Reports percentile intervals for the annualized
+    mean (arithmetic, x12) and annualized Sharpe, and the share of
+    resamples with a non-positive mean — a one-sided bootstrap p-value.
+    It does not correct for multiple testing; that is still the DSR's job.
+
+    With `market`, the same blocks resample (spread, market) pairs and each
+    resample re-estimates beta, giving an interval for the beta-adjusted
+    alpha that includes the uncertainty in beta itself.
+    """
+    if market is not None:
+        both = pd.concat([spread.rename("s"), market.rename("m")], axis=1).dropna()
+        x, mk = both["s"].to_numpy(), both["m"].to_numpy()
+    else:
+        x, mk = spread.dropna().to_numpy(), None
+    n = len(x)
+    if n < 2 * block:
+        return {}
+    rng = np.random.default_rng(seed)
+    n_blocks = -(-n // block)
+    starts = rng.integers(0, n, size=(reps, n_blocks))
+    idx = (starts[:, :, None] + np.arange(block)[None, None, :]) % n
+    samples = x[idx.reshape(reps, -1)[:, :n]]
+    means = samples.mean(axis=1)
+    sds = samples.std(axis=1, ddof=1)
+    sharpe = np.where(sds > 0, means / sds * np.sqrt(12), np.nan)
+    lo, hi = np.percentile(means * 12, [2.5, 97.5])
+    slo, shi = np.nanpercentile(sharpe, [2.5, 97.5])
+    out = {"reps": reps, "block": block, "ann_mean": float(x.mean() * 12),
+           "ann_mean_lo": float(lo), "ann_mean_hi": float(hi),
+           "sharpe": float(x.mean() / x.std(ddof=1) * np.sqrt(12)),
+           "sharpe_lo": float(slo), "sharpe_hi": float(shi),
+           "p_nonpositive": float((means <= 0).mean())}
+    if mk is not None:
+        m_s = mk[idx.reshape(reps, -1)[:, :n]]
+        m_c = m_s - m_s.mean(axis=1, keepdims=True)
+        betas = (m_c * (samples - means[:, None])).sum(axis=1) / (m_c ** 2).sum(axis=1)
+        alphas = (means - betas * m_s.mean(axis=1)) * 12
+        beta0 = np.cov(x, mk, ddof=1)[0, 1] / mk.var(ddof=1)
+        alo, ahi = np.percentile(alphas, [2.5, 97.5])
+        out.update(alpha_ann=float((x.mean() - beta0 * mk.mean()) * 12),
+                   alpha_lo=float(alo), alpha_hi=float(ahi),
+                   p_alpha_nonpositive=float((alphas <= 0).mean()))
+    return out

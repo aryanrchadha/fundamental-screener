@@ -20,7 +20,7 @@ bottom bucket:
 | **US** — Russell 3000 (full universe) | 2,547 | deciles | 167 | +13.2% | +2.32 | 0.988 | **"Yes" ‡** |
 | **Korea** — KOSPI 120 | 120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** |
 | Korea, survivorship-corrected | 107→120 | quintiles | 105 | +2.4% | +0.33 | 0.238 | **No** (identical) |
-| **India** — BSE 100 | 100 | quintiles | 26 † | +2.1% † | +0.34 † | 0.233 † | **No** † |
+| **India** — BSE 100 | 100 | quintiles | 26 † | +1.8% † | +0.30 † | 0.221 † | **No** † |
 
 **† India's row is DESCRIPTIVE, not inferential, and should not be read as
 a test.** It is included for completeness rather than omitted, because the
@@ -33,10 +33,13 @@ FY2026 annual filings); the slight monthly drift is the price term inside
 Altman Z, not new information. So the nominal N of 26 monthly observations
 carries an effective N closer to 3, and since standard errors scale as
 1/√N, a t-statistic computed on 26 overstates precision by roughly
-√(26/3) ≈ 2.9×. Deflating the +0.34 by that factor gives ≈ +0.11.
+√(26/3) ≈ 2.9×. Deflating the +0.30 by that factor gives ≈ +0.10. (India's
+figures were refreshed on 2026-10-11 to the panel as re-run on 2026-08-06;
+earlier drafts quoted +2.1%/yr, t +0.34, DSR 0.233 from the July run. The
+rank-correlation argument and every conclusion below are unchanged.)
 
 The conclusion is unaffected either way, which is why including the row
-costs nothing: at +0.34 the naive t-stat is already far from significance,
+costs nothing: at +0.30 the naive t-stat is already far from significance,
 so India neither strengthens nor weakens the finding. `screener/backtest.py`
 still refuses to emit a validation table for India (`backtestable=False`),
 and the dashboard still hides the views that would depend on one.
@@ -441,6 +444,60 @@ the mechanism identified, because a memo that quietly omitted its one
 positive-looking number would be less honest than one that explains why
 that number does not mean what it appears to.
 
+### What is left after market beta (added 2026-10-11)
+
+The four checks above argue the result is an artifact. A fifth measures
+how much of it is simply market exposure. Splitting the composite spread
+into its two legs against the equal-weight average of every ranked name
+(the two legs sum exactly to the spread), and regressing the spread on
+that average with Newey-West errors:
+
+| | Russell 3000 | S&P 500 | S&P 500, corrected | KOSPI 120 |
+|---|---|---|---|---|
+| Long leg vs universe (top − market) | **+11.0%/yr**, t 2.39 | +0.7%, t 0.48 | −0.6%, t −0.34 | +4.2%, t 0.75 |
+| Short leg vs universe (market − bottom) | +2.0%, t 1.09 | **−4.1%, t −2.13** | −2.4%, t −1.10 | −1.7%, t −0.51 |
+| Beta of spread to the universe | **+0.43, t 5.00** (R² 0.24) | −0.05 | −0.09 | −0.21 |
+| Mean spread, up / down months | **+2.1% / −1.0%** per month | −0.1% / −0.6% | −0.2% / −0.3% | −0.2% / +0.9% |
+| Alpha after beta (arithmetic, annualized) | **+4.5%, t 1.16** | −2.5%, t −0.82 | −1.5%, t −0.47 | +5.6%, t 0.85 |
+| 95% block-bootstrap interval for alpha | **−3.2% to +12.3%** | −8.5% to +3.0% | −7.8% to +4.5% | −7.5% to +19.1% |
+
+(Long/short legs are compounded annual returns as in the validation
+table; beta, alpha and the bootstrap use arithmetic monthly means x 12.
+The bootstrap resamples 6-month blocks of (spread, market) pairs 5,000
+times and re-estimates beta in each, so the interval includes the
+uncertainty in beta; 3- and 12-month blocks give the same picture.)
+
+**The Russell 3000 "survivor" is mostly market beta.** Its spread rises
+and falls with the market — a beta of 0.43 with a t-stat of 5 — and almost
+all of it comes from the long leg: the bucket the composite ranks top is
+the bucket of worst-fundamentals names (every LASSO coefficient is
+negative, see above), and those names are high-beta. Of the roughly
++12.5%/yr arithmetic spread, about 8 points are market exposure. What
+remains, +4.5%/yr, has a t-stat of 1.16 and a bootstrap interval that
+comfortably includes zero, before any multiple-testing correction at all.
+This is the same junk-rally mechanism the two-month finding points to,
+measured over the whole sample rather than in its two largest months.
+
+Two caveats. Beta is estimated on the full sample, so the adjustment is an
+attribution, not a hedge an investor could have set in advance. And the
+"market" here is the equal-weight average of the same ranked names, not an
+external index; against a cap-weighted index the beta of a small-cap
+junk bucket would likely be larger, not smaller.
+
+**The S&P 500 loss is a short-leg phenomenon.** The long leg is flat
+against the universe; the drag is the bottom bucket *beating* it by 4.1%
+a year (t −2.13) — the worst-ranked large caps outperformed, the same
+distress-is-contrarian pattern the O-Score row shows. Its beta is
+essentially zero, so there is no market-exposure story to tell there. In
+the survivorship-corrected run the same short-leg drag is smaller and no
+longer significant (−2.4%, t −1.10); neither leg is distinguishable from
+the universe there.
+
+Both checks are diagnostics run after the fact on the same data, and
+none of the four DSR trials accounts for them; they can weaken a result,
+which is how they are used here, but a "pass" on any of them would not
+strengthen one.
+
 ## International extension (Brazil / B3): what was proven and what wasn't
 
 `pit_fundamentals` now ingests a second, real, free taxonomy — Brazil's CVM
@@ -838,12 +895,12 @@ all (2 would be the minimum to draw a line).
 | Window ending | Ann. spread | DSR-95% band | Plain SE band |
 |---|---|---|---|
 | 2026-04 | +0.7% | ±17.9% | ±12.7% |
-| 2026-05 | +3.8% | ±18.6% | ±12.6% |
-| 2026-06 | +2.3% | ±17.9% | ±12.4% |
+| 2026-05 | +3.6% | ±18.4% | ±12.5% |
+| 2026-06 | +2.1% | ±17.7% | ±12.3% |
 
 All three points sit far inside both bands — nowhere close to clearing
 either. That is at least consistent with the descriptive full-sample
-number reported earlier in this memo (+2.1%/yr, naive t +0.34, marked as
+number reported earlier in this memo (+1.8%/yr, naive t +0.30, marked as
 not a test): three overlapping snapshots of the same underlying series
 agreeing with its own average is expected, not informative. It would be a
 mistake to read "3 points near zero" as either confirming or decaying
@@ -1066,7 +1123,7 @@ driving its one positive-looking number. Adding India extends the screen
 but deliberately not the evidence base: its composite ranking has a median
 month-to-month rank correlation of 0.998 and updates on only three annual
 filings, so its 26 monthly observations carry an effective sample nearer
-3. Its descriptive spread (+2.1%/yr, naive t +0.34) is reported in the
+3. Its descriptive spread (+1.8%/yr, naive t +0.30) is reported in the
 cross-market table for completeness and marked as not a test. A fifth
 market, China, was researched and deliberately not built — no free source
 combines structured statements with a genuine filing date without a

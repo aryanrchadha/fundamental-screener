@@ -42,7 +42,7 @@ survivorship-corrected re-runs, that bar is never cleared:
 | US, survivorship-corrected | 167 | −3.0% | −0.91 | 0.020 | No |
 | Korea — KOSPI 120 | 105 | +2.4% | +0.33 | 0.238 | No |
 | Korea, survivorship-corrected | 105 | +2.4% | +0.33 | 0.238 | No |
-| India — BSE 100 | 26 † | +2.1% † | +0.34 † | 0.233 † | No † |
+| India — BSE 100 | 26 † | +1.8% † | +0.30 † | 0.221 † | No † |
 
 † Descriptive only, not a test: India's composite ranking has a median
 month-to-month rank correlation of 0.998 and updates on just three annual
@@ -69,7 +69,7 @@ universe too:
 | US, survivorship-corrected | 144 | 0 / 144 † | 0 / 144 | +21.3%/yr | −1.8%/yr |
 | Korea KOSPI 120 | 82 | **12 / 82** — all Feb 2019 – May 2020 | 19 / 82 | +13.9%/yr | −2.1%/yr |
 | Korea, survivorship-corrected | 82 | identical to static | | | |
-| **India BSE 100** ‡ | **3** | 0 / 3 | 0 / 3 | +17.9%/yr | +2.3%/yr |
+| **India BSE 100** ‡ | **3** | 0 / 3 | 0 / 3 | +17.9%/yr | +2.1%/yr |
 
 ‡ India is not a backtestable universe (see below) — 27 monthly
 cross-sections and a 24-month window leave only 3, 96%-overlapping windows.
@@ -255,6 +255,11 @@ this being an artifact rather than a real reversal:
   without them) — both were broad junk-rally months. An earlier version
   of this bullet said "nearly the entire return" came from these events;
   the two names account for about 2.7 of the 13.2 points.
+- **It is mostly market beta.** The spread has a beta of +0.43 (t 5.0)
+  to the ranked universe and earns +2.1%/month in up markets vs −1.0% in
+  down ones; nearly all of it is the long leg. After removing beta, alpha
+  is +4.5%/yr with t 1.16 and a 95% block-bootstrap interval of −3.2% to
+  +12.3%. See FINDINGS.md, "What is left after market beta".
 - **The effect is entirely a post-2019 phenomenon.** Cumulative spread:
   −2.8% in the first half (2012–2018), **+383.5%** in the second
   (2019–2025) — a genuine cross-sectional factor premium does not usually

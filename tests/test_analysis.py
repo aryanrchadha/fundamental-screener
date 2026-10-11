@@ -211,3 +211,28 @@ def test_horizon_table_uses_at_least_k_minus_one_lags():
     t = analysis.horizon_table({1: pd.Series(rng.normal(0, 0.02, 60), index=idx),
                                 12: pd.Series(rng.normal(0, 0.05, 60), index=idx)}).set_index("horizon_months")
     assert t.loc[12, "nw_lag"] == 11 and t.loc[1, "nw_lag"] < 11
+
+
+def test_beta_adjustment_recovers_alpha_and_beta():
+    rng = np.random.default_rng(7)
+    idx = pd.date_range("2012-01-31", periods=150, freq="ME")
+    m = pd.Series(rng.normal(0.01, 0.05, 150), index=idx)
+    legs = pd.DataFrame({"market": m, "spread": 0.002 + 0.6 * m + rng.normal(0, 0.003, 150)})
+    ba = analysis.beta_adjusted(legs)
+    assert ba["beta"] == pytest.approx(0.6, abs=0.02)
+    assert ba["alpha_ann"] == pytest.approx(0.024, abs=0.01) and ba["alpha_t"] > 3
+    assert ba["raw_ann"] == pytest.approx(legs["spread"].mean() * 12)
+
+
+def test_block_bootstrap_is_reproducible_and_brackets_the_estimate():
+    rng = np.random.default_rng(8)
+    idx = pd.date_range("2012-01-31", periods=120, freq="ME")
+    m = pd.Series(rng.normal(0.01, 0.05, 120), index=idx)
+    s = 0.6 * m + rng.normal(0, 0.01, 120)                       # pure beta, no alpha
+    a = analysis.block_bootstrap(s, block=6, reps=2000, market=m)
+    assert a == analysis.block_bootstrap(s, block=6, reps=2000, market=m)   # fixed seed
+    assert a["ann_mean_lo"] < a["ann_mean"] < a["ann_mean_hi"]
+    assert a["alpha_lo"] < 0 < a["alpha_hi"]                     # no alpha -> interval spans zero
+    assert a["alpha_ann"] == pytest.approx(analysis.beta_adjusted(
+        pd.DataFrame({"spread": s, "market": m}))["alpha_ann"])  # point estimate = OLS alpha
+    assert analysis.block_bootstrap(s.iloc[:5], block=6) == {}
