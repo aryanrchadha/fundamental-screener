@@ -177,15 +177,23 @@ An initial committed run capped the universe to the top 300 names by index
 weight — but checking the ticker sets directly showed 286 of those 300
 were already S&P 500 constituents, making that run a pipeline consistency
 check, not a genuine breadth test. `config.RUSSELL3000_MAX_TICKERS` is now
-`None` (full universe): of the resulting **2,547 tickers with real Yahoo
-price history** (2,582 requested; of the 35 without history, 27 are
-genuinely delisted/unknown — and **8 were not**: dual-class names such as
-Berkshire Hathaway B, which iShares' file wrote as `BRKB` and Yahoo only
-knows as `BRK-B`, so they were silently dropped. Found 2026-10-13 and fixed
-in `screener.universe.normalize_share_class` for the next rebuild; this
-run predates it), only 494 overlap the S&P
-500 — **2,053 are genuinely non-overlapping names**, the real test this
-project's own prior draft asked for.
+`None` (full universe). The committed run is the **2026-10-13 rebuild**
+on that day's IWV holdings: **2,548 tickers with real Yahoo price history**
+of 2,591 requested, of which only 495 overlap the S&P 500 — **2,053 are
+genuinely non-overlapping names**, the real test this project's own prior
+draft asked for.
+
+The rebuild fixed two silent exclusions in the August run. Eight
+dual-class names (Berkshire Hathaway B, both Brown-Forman classes, Greif B,
+HEICO, Lennar B, Moog A, U-Haul B) had been dropped because iShares wrote
+them as `BRKB` — a form Yahoo does not know — and their facts were filed
+under that dead ticker; the August docs called them "genuinely delisted".
+`normalize_share_class` maps iShares' current `BRK B` form to `BRK-B`, and
+the ingest now re-labels a company's facts when its ticker changes (which
+also recovered four corporate renames, e.g. Equity Residential → `VMRK`).
+Of the 43 tickers still without history, nearly all are tiny new listings,
+non-equity lines or genuinely delisted names; one, `DDS` (Dillard's),
+should have history and is most likely a transient Yahoo failure.
 
 Getting a trustworthy result at this scale required fixing two real bugs,
 both only visible once the universe stopped being large-cap-only:
@@ -197,7 +205,8 @@ both only visible once the universe stopped being large-cap-only:
    problem rather than a request-shape one. Fixed in `screener/prices.py`
    by chunking the download (250 symbols/call) with a pause between
    chunks and an escalating-backoff retry for symbols still missing after
-   a chunk — confirmed live: 2,547/2,582 recovered.
+   a chunk — confirmed live: 2,547/2,582 recovered in August, 2,548/2,591
+   in the October rebuild.
 2. **Yahoo pads pre-listing history with literal `0.0`, not `NaN`.**
    Confirmed on a real ticker (`DEC`/Diversified Energy, IPO'd Nov 2023,
    whose cached history showed `0.0` for every month back to 2021). A real
@@ -211,61 +220,65 @@ person scaling this pipeline doesn't rediscover them from a stack trace.
 
 | Strategy | Ann. return (D10−D1) | Ann. Sharpe | NW t-stat | DSR | Survives 95%? |
 |---|---|---|---|---|---|
-| Piotroski F-Score | −6.9% | −0.49 | −1.69 | 0.001 | No |
-| Altman Z-Score | −10.6% | −1.04 | −3.97 | 0.000 | No |
-| Ohlson O-Score | −17.6% | −1.30 | −4.07 | 0.000 | No |
-| **Composite (LASSO)** | **+13.2%** | **0.75** | **2.32** | **0.988** | **YES** |
+| Piotroski F-Score | −7.0% | −0.49 | −1.65 | 0.001 | No |
+| Altman Z-Score | −10.8% | −1.05 | −4.13 | 0.000 | No |
+| Ohlson O-Score | −17.6% | −1.31 | −4.10 | 0.000 | No |
+| **Composite (LASSO)** | **+12.1%** | **0.68** | **2.13** | **0.973** | **YES** |
+
+(The August run, before the fixes above, gave +13.2%, t 2.32, DSR 0.988.)
 
 **This is the only "survivor" in the entire project — read the rest of this
 section before believing it.** Every individual score is strongly and
-significantly *negative* (O-Score's t-stat of −4.07 is the most significant
-result anywhere in this project, in the *distress-is-contrarian* direction
-already seen in every other market), yet the LASSO composite is positive
-with DSR = 0.988. That combination is possible because every LASSO
-coefficient is negative at every refit — the composite ranks the
-*worst*-fundamentals names into D10, and D10 beat D1. Four things point to
-this being an artifact rather than a real reversal:
+significantly *negative* (Z- and O-Score t-stats of −4.13 and −4.10 are
+the most significant results anywhere in this project, in the
+*distress-is-contrarian* direction already seen in every other market),
+yet the LASSO composite is positive with DSR = 0.973. That combination is
+possible because no LASSO coefficient is positive at any refit — the
+composite ranks the *worst*-fundamentals names into D10, and D10 beat D1.
+Six things point to this being an artifact rather than a real reversal,
+and every one of them is sharper after the rebuild than before:
 
 - **A direct audit confirms the survivorship-bias hypothesis rather than
   just arguing for it.** If D10 structurally over-represents companies
   that crashed and survived (rather than the ones that crashed and
   delisted, absent from any backtest built on today's constituent list),
   that predicts D10 should be full of "distressed survivors." Checking
-  directly against the 742 D10 tickers with price history: 392 (52.8%)
+  directly against the 754 D10 tickers with price history: 390 (51.7%)
   had a peak-to-trough drawdown worse than −70% at some point in-sample,
-  and 202 of those (27% of all D10 names) recovered to over half their
+  and 203 of those (27% of all D10 names) recovered to over half their
   prior peak afterward — `GME` (−91.1% drawdown, then the short squeeze)
-  and `SBET` (−99.9%, then the crypto pivot) are both in this group,
-  tying this check to the outlier-month one below. **Removing just these
-  202 names from D10 drops annualized return from +13.2% to +8.9%, t from
-  2.32 to 1.88, and DSR from 0.988 to 0.9145 — below the bar** — on its
-  own, without touching anything else about the run.
+  among them. **Removing just these 203 names from D10 drops annualized
+  return from +12.1% to +7.8%, t from 2.13 to 1.67, and DSR from 0.973 to
+  0.851 — well below the bar** — on its own, without touching anything
+  else about the run.
 - **No survivorship correction exists for this universe** (see below) —
   today's Russell 3000 list only contains names that are still around, so
   the "worst fundamentals" bucket structurally excludes every company that
   went bankrupt between 2012 and today and keeps only the ones that
   survived, many via a distress-recovery rally — the mechanism the audit
   above confirms directly rather than merely predicts.
-- **The verdict hinges on two months.** December 2020's spread is
-  dominated by `GME` — GameStop's short-squeeze month, **+1,625% in one
-  month**, equal-weighted into a 102-name bucket; April 2025 by `SBET`
-  (+2,267%, a crypto-treasury pivot). Winsorizing the spread series at the
-  1st/99th percentile still survives (DSR 0.993), but **dropping just
-  those two months entirely drops DSR to 0.932 — below the 0.95 bar.** A
-  result whose survival flips depending on whether two months are capped
-  or removed is not robust. The months matter more than the names:
-  removing only GME and SBET leaves DSR at 0.959 (+10.5%/yr), because the
-  rest of the top bucket rallied too (+8.3 and +6.8 points of spread
-  without them) — both were broad junk-rally months. An earlier version
-  of this bullet said "nearly the entire return" came from these events;
-  the two names account for about 2.7 of the 13.2 points.
-- **It is mostly market beta.** The spread has a beta of +0.43 (t 5.0)
-  to the ranked universe and earns +2.1%/month in up markets vs −1.0% in
+- **The verdict hinges on two months, and on two names.** December 2020's
+  spread is dominated by `GME` — GameStop's short-squeeze month,
+  **+1,625% in one month**, equal-weighted into a 102-name bucket; April
+  2025 by `SBET` (+2,267%, a crypto-treasury pivot). Winsorizing the spread
+  series at the 1st/99th percentile still survives (DSR 0.980), but
+  **dropping just those two months drops DSR to 0.881**, and **removing
+  only GME and SBET from the buckets drops it to 0.924** — both below the
+  0.95 bar. Both months were also broad junk rallies (+8.3 and +6.6 points
+  of spread without the two names), so the two names explain about 2.7 of
+  the 12.1 points; but the verdict no longer survives losing either the
+  names or the months. (In the August run, removing only the names left
+  DSR at 0.959; that margin did not survive the rebuild.)
+- **It is mostly market beta.** The spread has a beta of +0.44 (t 5.3)
+  to the ranked universe and earns +2.0%/month in up markets vs −1.2% in
   down ones; nearly all of it is the long leg. After removing beta, alpha
-  is +4.5%/yr with t 1.16 and a 95% block-bootstrap interval of −3.2% to
-  +12.3%. See FINDINGS.md, "What is left after market beta".
+  is +3.2%/yr with t 0.85 and a 95% block-bootstrap interval of −4.2% to
+  +10.9%. See FINDINGS.md, "What is left after market beta".
+- **It does not survive realistic trading costs.** One-way turnover is
+  about 12% of each leg per month; at **17.6 bps one-way** the DSR drops
+  below 0.95, and small-cap costs typically run 25–60 bps.
 - **The effect is entirely a post-2019 phenomenon.** Cumulative spread:
-  −2.8% in the first half (2012–2018), **+383.5%** in the second
+  −18.9% in the first half (2012–2018), **+402.0%** in the second
   (2019–2025) — a genuine cross-sectional factor premium does not usually
   materialize from nothing across 7 flat years and then explode across the
   pandemic/meme-stock/crypto-mania era specifically.
@@ -721,7 +734,7 @@ Everything the CLI does is reachable from the page:
 - **Month explorer** — click any month's bar to see who was in the top and
   bottom buckets and how much each name contributed to that month's spread
   (contributions sum to the spread). Russell 3000, December 2020: GME alone
-  is 15.9 of the 24.3 points.
+  is 15.9 of the 24.2 points.
 - **Robustness** — re-scores the composite spread with winsorizing,
   dropping the N largest/smallest months, or excluding named tickers, using
   the same Newey-West/DSR code as the validation table (and reproducing
@@ -733,8 +746,8 @@ Everything the CLI does is reachable from the page:
   universe and short leg vs it (they sum exactly), gives the spread's beta
   to the market and its mean in up vs down months, and re-holds the same
   buckets for 1/3/6/12 months (Newey-West lag ≥ k − 1; 1 month reproduces
-  the backtest exactly). Russell 3000: beta +0.43, +2.1%/month in up
-  markets vs −1.0% in down, and almost all of the spread is the long leg —
+  the backtest exactly). Russell 3000: beta +0.44, +2.0%/month in up
+  markets vs −1.2% in down, and almost all of the spread is the long leg —
   the junk-rally reading in numbers. S&P 500: the loss is the short leg
   (worst-ranked names beat the universe, t −2.13).
 - **Download report** — one self-contained HTML file (opens offline) for
@@ -744,9 +757,9 @@ Everything the CLI does is reachable from the page:
 - **Costs** — one-way turnover of the top and bottom buckets each month,
   the spread net of a trading cost you set, and two break-evens: the cost
   at which the mean spread reaches zero and the cost at which the DSR drops
-  to 0.95. The Russell 3000 "survivor" stops surviving at **36.6 bps
-  one-way** — inside the usual 25–60 bps range for small caps — and its
-  mean spread hits zero at ~226 bps.
+  to 0.95. The Russell 3000 "survivor" stops surviving at **17.6 bps
+  one-way** — below the usual 25–60 bps range for small caps — and its
+  mean spread hits zero at ~207 bps.
 - **Watchlist** — pin tickers (saved in your browser, per universe) and
   follow their decile or any score side by side, with this month's decile
   next to the one 12 months earlier.
