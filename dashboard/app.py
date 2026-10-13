@@ -27,7 +27,7 @@ import config
 from dashboard import analysis
 from dashboard.grids import col, grid, register_exports, row_rule
 from dashboard.report import build_report
-from dashboard.jobs import RUNNER, STEPS, step_commands, survivorship_supported
+from dashboard.jobs import RUNNER, STEPS, sec_contact_missing, step_commands, survivorship_supported
 from screener.universes import UNIVERSES, Universe, get_universe
 
 
@@ -1144,7 +1144,13 @@ def build_app(universe="sp500") -> Dash:
         cmds = step_commands(name, steps or [], bool(surv), limit)
         if not cmds:
             return "Nothing to run — tick at least one step."
-        return "\n".join(c.display() for c in cmds)
+        text = "\n".join(c.display() for c in cmds)
+        if sec_contact_missing(name, steps):
+            text += ("\n\n⚠ SEC_USER_AGENT is still the placeholder address. The SEC asks "
+                     "automated EDGAR clients to identify themselves with a real contact; set it "
+                     "before ingesting, e.g.\n  export SEC_USER_AGENT=\"fundamental-screener "
+                     "you@example.com\"\nin the shell that starts this app.")
+        return text
 
     @app.callback(Output("pipe-status", "children", allow_duplicate=True),
                   Input("pipe-run", "n_clicks"),

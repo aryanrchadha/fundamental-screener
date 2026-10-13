@@ -405,3 +405,27 @@ def test_fig_rolling_labels_non_backtestable_charts_as_descriptive():
     assert "descriptive only" not in normal.layout.title.text
     assert len(normal.layout.annotations) == 0
     assert normal.data[-1].mode == "lines"
+
+
+def test_iwv_dual_class_tickers_map_to_the_edgar_yahoo_form():
+    """iShares writes share classes as 'BRK B' (Oct 2026), 'BRK.B', or the
+    unsplittable 'BRKB' (Aug 2026, which cost the August run Berkshire and
+    seven other dual-class names). Spaces and dots must become 'BRK-B'."""
+    from screener.universe import normalize_share_class, parse_iwv_holdings
+
+    assert normalize_share_class("BRK B") == "BRK-B"
+    assert normalize_share_class("brk.b") == "BRK-B"
+    assert normalize_share_class(" BF  A ") == "BF-A"
+    assert normalize_share_class("AAPL") == "AAPL"
+
+    csv = "\n".join([
+        "iShares Russell 3000 ETF", "Fund Holdings as of,Oct 10, 2026", "",
+        "Ticker,Name,Sector,Asset Class,Market Value,Weight (%)",
+        "AAPL,APPLE INC,Information Technology,Equity,1,6.5",
+        "BRK B,BERKSHIRE HATHAWAY INC CLASS B,Financials,Equity,1,1.5",
+        "BF A,BROWN FORMAN CORP CLASS A,Consumer Staples,Equity,1,0.01",
+        "XTSLA,BLK CSH FND TREASURY SL AGENCY,Cash and/or Derivatives,Money Market,1,0.2",
+        "-,USD CASH,Cash and/or Derivatives,Cash,1,0.1",
+    ])
+    out = parse_iwv_holdings(csv)
+    assert out["ticker"].tolist() == ["AAPL", "BRK-B", "BF-A"]      # weight order, equities only

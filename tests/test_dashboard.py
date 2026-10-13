@@ -148,3 +148,15 @@ def test_watchlist_rows_report_latest_and_year_ago_decile():
     assert watchlist_rows(p, []) == []
     fig = fig_watchlist(p, ["A", "B"], "decile", 5)
     assert len(fig.data) == 2 and tuple(fig.layout.yaxis.range) == (0.5, 5.5)
+
+
+def test_ingest_warns_only_for_edgar_universes_with_placeholder_contact(monkeypatch):
+    import config
+    from dashboard.jobs import sec_contact_missing
+
+    monkeypatch.setattr(config, "SEC_USER_AGENT", "fundamental-screener REPLACE_ME_contact@example.com")
+    assert sec_contact_missing("russell3000", ["ingest", "backtest"])
+    assert not sec_contact_missing("russell3000", ["backtest"])          # no EDGAR traffic
+    assert not sec_contact_missing("kospi", ["ingest"])                  # DART, not EDGAR
+    monkeypatch.setattr(config, "SEC_USER_AGENT", "fundamental-screener someone@university.edu")
+    assert not sec_contact_missing("sp500", ["ingest"])

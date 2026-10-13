@@ -178,8 +178,12 @@ weight — but checking the ticker sets directly showed 286 of those 300
 were already S&P 500 constituents, making that run a pipeline consistency
 check, not a genuine breadth test. `config.RUSSELL3000_MAX_TICKERS` is now
 `None` (full universe): of the resulting **2,547 tickers with real Yahoo
-price history** (2,582 requested; the rest are genuinely delisted/unknown,
-confirmed by three retries each still failing), only 494 overlap the S&P
+price history** (2,582 requested; of the 35 without history, 27 are
+genuinely delisted/unknown — and **8 were not**: dual-class names such as
+Berkshire Hathaway B, which iShares' file wrote as `BRKB` and Yahoo only
+knows as `BRK-B`, so they were silently dropped. Found 2026-10-13 and fixed
+in `screener.universe.normalize_share_class` for the next rebuild; this
+run predates it), only 494 overlap the S&P
 500 — **2,053 are genuinely non-overlapping names**, the real test this
 project's own prior draft asked for.
 

@@ -101,7 +101,27 @@ def get_russell3000_constituents() -> pd.DataFrame:
     session.headers.update({"User-Agent": config.SEC_USER_AGENT})
     resp = session.get(IWV_HOLDINGS_URL, timeout=60)
     resp.raise_for_status()
-    text = resp.content.decode("latin1")  # BlackRock serves this as ISO-8859-1
+    out = parse_iwv_holdings(resp.content.decode("latin1"))  # BlackRock serves ISO-8859-1
+    if config.RUSSELL3000_MAX_TICKERS:
+        out = out.head(config.RUSSELL3000_MAX_TICKERS)
+    return out.reset_index(drop=True)
+
+
+def normalize_share_class(ticker: str) -> str:
+    """Canonical dual-class form, BRK-B — what both EDGAR's ticker map and
+    Yahoo use. iShares has written the class suffix three ways over this
+    project's life: with a dot (BRK.B), concatenated (BRKB, through at least
+    August 2026), and with a space (BRK B, by October 2026). The
+    concatenated form cannot be split reliably (is BFA "BF-A" or a
+    four-letter ticker?), and the August run lost Berkshire, both
+    Brown-Forman classes, Greif B, HEICO A, Lennar B, Moog A and U-Haul B
+    to it — no Yahoo history, so silently excluded. Dots and spaces are
+    unambiguous and are mapped here."""
+    return " ".join(str(ticker).upper().split()).replace(".", "-").replace(" ", "-")
+
+
+def parse_iwv_holdings(text: str) -> pd.DataFrame:
+    """Parse IWV's holdings CSV (see get_russell3000_constituents)."""
     lines = text.splitlines()
     header_idx = next(i for i, line in enumerate(lines) if line.startswith("Ticker,"))
     df = pd.read_csv(io.StringIO("\n".join(lines[header_idx:])))
@@ -112,16 +132,12 @@ def get_russell3000_constituents() -> pd.DataFrame:
     df = df.dropna(subset=["Weight (%)"])
     df = df.drop_duplicates(subset="Ticker")
 
-    out = pd.DataFrame({
-        "ticker": df["Ticker"].astype(str).str.upper().str.replace(".", "-", regex=False),
+    return pd.DataFrame({
+        "ticker": df["Ticker"].map(normalize_share_class),
         "name": df["Name"],
         "sector": df["Sector"],
         "weight": df["Weight (%)"],
     }).sort_values("weight", ascending=False).reset_index(drop=True)
-
-    if config.RUSSELL3000_MAX_TICKERS:
-        out = out.head(config.RUSSELL3000_MAX_TICKERS)
-    return out.reset_index(drop=True)
 
 
 def get_sp500_changes() -> pd.DataFrame:

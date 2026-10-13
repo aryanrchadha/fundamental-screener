@@ -48,6 +48,15 @@ _INGEST_ARGS = {
 }
 
 
+def sec_contact_missing(universe: str, steps) -> bool:
+    """True when an EDGAR ingest would run with config's placeholder
+    User-Agent. The SEC asks automated clients to identify themselves with
+    a real contact address; the pipeline only warns (as the CLI does), and
+    the address is the user's to supply via the SEC_USER_AGENT env var."""
+    return ("ingest" in (steps or []) and universe in ("sp500", "russell3000")
+            and "REPLACE_ME" in config.SEC_USER_AGENT)
+
+
 def survivorship_supported(universe: str) -> bool:
     """Only universes with a real point-in-time membership source. Russell
     3000 has none (no free reconstitution feed) and India is screener-only,

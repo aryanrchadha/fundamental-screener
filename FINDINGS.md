@@ -323,8 +323,16 @@ caught before trusting any number from this run:
    pause between chunks) with an escalating-backoff retry for symbols
    still missing after a chunk — recovered coverage from ~43% to
    **2,547/2,582 (98.6%)**, with the unrecovered ~35 failing all three
-   retries consistently (the signature of genuinely delisted/unknown
-   tickers, not throttling).
+   retries consistently. That was read at the time as the signature of
+   genuinely delisted/unknown tickers, not throttling — true for 27 of
+   them, but **8 were a ticker-format bug** (found 2026-10-13): iShares'
+   file wrote dual-class shares concatenated (`BRKB`, `BFA`, `BFB`,
+   `GEFB`, `HEIA`, `LENB`, `MOGA`, `UHALB`), a form Yahoo does not
+   recognize, so Berkshire Hathaway — one of the index's largest
+   weights — and seven others were silently absent from this run.
+   Retries could never recover them because the request itself was
+   wrong. `normalize_share_class` now maps the current `BRK B` form to
+   `BRK-B`; the results in this section still exclude these eight.
 2. **Yahoo pads a ticker's pre-listing history with literal `0.0`, not
    `NaN`.** Confirmed on real data: `DEC` (Diversified Energy, IPO'd Nov
    2023) returned `0.0` for every month back to 2021 instead of an absent
