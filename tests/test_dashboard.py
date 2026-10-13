@@ -42,7 +42,8 @@ def test_survivorship_flag_only_where_a_membership_source_exists():
 def test_backups_cover_the_files_each_step_overwrites():
     bt, val = step_commands("sp500", ["backtest", "validation"], survivorship=True)
     pit = SP500.corrected()
-    assert set(bt.outputs) == {pit.panel_path, pit.bucket_returns_path, pit.coefs_path}
+    assert set(bt.outputs) == {pit.panel_path, pit.bucket_returns_path, pit.coefs_path,
+                               pit.prices_cache}
     assert set(val.outputs) == {pit.validation_path, pit.rolling_path}
     assert step_commands("sp500", ["ingest"])[0].outputs == ()
 

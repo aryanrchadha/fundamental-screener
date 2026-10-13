@@ -148,6 +148,31 @@ def already_ingested(con, cik: str) -> bool:
     return con.execute("SELECT 1 FROM ingest_log WHERE cik = ?", [cik]).fetchone() is not None
 
 
+def relabel_if_stale(con, cik: str, ticker: str, requested: set[str]) -> str | None:
+    """Move an already-ingested company's facts to `ticker` when the ticker
+    they are stored under is no longer one the caller asked for.
+
+    Facts are stored once per company (ingest_company deletes by CIK), under
+    the ticker that was requested at ingest time, and snapshots look them up
+    by ticker. When a source renames a ticker — iShares rewrote Berkshire's
+    "BRKB" as "BRK B" between August and October 2026 — the facts stay
+    filed under a name nothing asks for any more and the company silently
+    scores as missing. Re-labelling needs no network call: the facts are
+    the same company's. If the stored ticker is still requested (both share
+    classes listed, e.g. LEN and LEN-B), it is kept: one scored ticker per
+    company, as before. Returns the old ticker when it relabels.
+    """
+    row = con.execute("SELECT ticker FROM ingest_log WHERE cik = ?", [cik]).fetchone()
+    if row is None:
+        return None
+    old = (row[0] or "").upper()
+    if old == ticker or old in requested:
+        return None
+    con.execute("UPDATE pit_facts SET ticker = ? WHERE cik = ?", [ticker, cik])
+    con.execute("UPDATE ingest_log SET ticker = ? WHERE cik = ?", [ticker, cik])
+    return old
+
+
 def run_ingest(
     tickers: list[str],
     db_path: str = DEFAULT_DB_PATH,
@@ -167,6 +192,7 @@ def run_ingest(
     con = connect(db_path)
     init_db(con)
     total = 0
+    requested = {t.upper() for t in tickers}
     for i, ticker in enumerate(tickers, 1):
         # EDGAR uses '-' where exchanges use '.' (BRK.B -> BRK-B and vice versa)
         cik = (
@@ -178,6 +204,10 @@ def run_ingest(
             log.warning("No CIK for ticker %s — skipped", ticker)
             continue
         if not refresh and already_ingested(con, cik):
+            old = relabel_if_stale(con, cik, ticker.upper(), requested)
+            if old:
+                log.info("[%d/%d] %s: re-labelled existing facts from stale ticker %s",
+                         i, len(tickers), ticker, old)
             continue
         n = ingest_company(con, client, cik, ticker.upper())
         total += n

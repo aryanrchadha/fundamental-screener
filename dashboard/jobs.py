@@ -93,7 +93,10 @@ def step_commands(universe: str, steps, survivorship: bool = False,
                 cmd += ["--limit", str(int(limit))]
             out.append(Step(step, cmd))
         elif step == "backtest":
-            files = (uni.panel_path, uni.bucket_returns_path, uni.coefs_path)
+            # The price cache is rewritten whenever the ticker list changes, and
+            # re-downloading cannot reproduce it (Yahoo revises history and drops
+            # delisted names), so it is backed up with the outputs.
+            files = (uni.panel_path, uni.bucket_returns_path, uni.coefs_path, uni.prices_cache)
             if not uni.backtestable:
                 files += (uni.rolling_path,)  # run_screen writes its descriptive rolling chart too
             out.append(Step(step, py + ["screener.backtest", "--universe", universe, *surv], files))
